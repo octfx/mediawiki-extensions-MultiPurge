@@ -1,0 +1,6 @@
+{
+	"@metadata": {
+		"authors": []
+	},
+	"multipurge-desc": "Purge multiple services like cloudflare and varnish on page modification."
+}

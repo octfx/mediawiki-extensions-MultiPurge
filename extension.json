@@ -1,0 +1,64 @@
+{
+	"name": "MultiPurge",
+	"version": "0.0.1",
+	"author": [
+		"Octfx"
+	],
+	"url": "https://www.mediawiki.org/wiki/Extension:MultiPurge",
+	"descriptionmsg": "multipurge-desc",
+	"license-name": "GPL-2.0-or-later",
+	"type": "parserhook",
+	"requires": {
+		"MediaWiki": ">= 1.35.0",
+		"platform": {
+			"php": ">=7.2.0"
+		}
+	},
+	"config": {
+		"MultiPurgeCloudFlareZoneId": {
+			"description": "The zone ID",
+			"value": null
+		},
+		"MultiPurgeCloudFlareApiToken": {
+			"description": "",
+			"value": null
+		},
+		"MultiPurgeCloudFlareAccountId": {
+			"description": "",
+			"value": null
+		},
+		"MultiPurgeVarnishServers": {
+			"description": "",
+			"value": null
+		},
+		"MultiPurgeEnabledServices": {
+			"description": "List of enabled services, e.g. [Varnish, Cloudflare]",
+			"value": null
+		},
+		"MultiPurgeServiceOrder": {
+			"description": "Order of purge requests, e.g. [Varnish, Cloudflare]",
+			"value": null
+		}
+	},
+	"ConfigRegistry": {
+		"MultiPurge": "GlobalVarConfig::newInstance"
+	},
+	"MessagesDirs": {
+		"MultiPurge": [
+			"i18n"
+		]
+	},
+	"AutoloadNamespaces": {
+		"MediaWiki\\Extension\\MultiPurge\\": "includes/"
+	},
+	"HookHandlers": {
+
+	},
+	"Hooks": {
+
+	},
+	"ExtensionFunctions": [
+		"MediaWiki\\Extension\\MultiPurge\\Hooks\\MainHooks::setup"
+	],
+	"manifest_version": 2
+}
