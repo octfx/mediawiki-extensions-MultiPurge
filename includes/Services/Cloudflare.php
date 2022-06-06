@@ -2,30 +2,33 @@
 
 declare( strict_types=1 );
 
-namespace MediaWiki\Extension\MultiPurge\Service;
+namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Http\HttpRequestFactory;
 use MWHttpRequest;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
+	private $requestFactory;
 
 	/**
 	 * @var MWHttpRequest
 	 */
 	private $request;
 
-	public function __construct( Config $extensionConfig ) {
+	public function __construct( Config $extensionConfig, HttpRequestFactory $requestFactory ) {
 		$this->extensionConfig = $extensionConfig;
+		$this->requestFactory = $requestFactory;
 	}
 
 	public function setup(): void {
+		wfDebugLog( 'MultiPurge', 'Setup Cloudflare' );
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
 		$accountId = $this->extensionConfig->get( 'MultiPurgeCloudFlareAccountId' );
 
-		$this->request = MediaWikiServices::getInstance()->getHttpRequestFactory()->create(
+		$this->request = $this->requestFactory->create(
 			"https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
 			[
 				'method' => 'POST',
@@ -38,12 +41,13 @@ class Cloudflare implements PurgeServiceInterface {
 		$this->request->setHeader( 'Content-Type', 'application/json' );
 	}
 
-	public function getPurgeRequest( $urls ): MWHttpRequest {
+	public function getPurgeRequest( $urls ): array {
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
 		}
+		wfDebugLog( 'MultiPurge', sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls ) ) );
 		$this->request->setData( [ 'files' => $urls ] );
 
-		return $this->request;
+		return [ $this->request ];
 	}
 }

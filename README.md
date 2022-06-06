@@ -4,6 +4,12 @@ Allows purging of pages for multiple services in a defined order.
 
 Based on https://phabricator.wikimedia.org/T216225#5335375
 
+```
+For a custom CDN purger:
+
+    Enable $wgUseCDN so that CdnCacheUpdate runs. (Keep these off $wgCdnReboundPurgeDelay, $wgCdnServers, and $wgHTCPRouting).
+```
+
 ## Configuration Options
 
 | Variable                               | Default Value    | Description                                                                                                                                             |
