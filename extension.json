@@ -49,7 +49,6 @@
 	},
 	"Hooks": {
 		"LocalFilePurgeThumbnails": "purge",
-		"TitleSquidURLs": "purge",
 		"ArticlePurge": "purge"
 	},
 	"HookHandlers": {

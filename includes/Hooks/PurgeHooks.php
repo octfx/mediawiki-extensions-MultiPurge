@@ -8,7 +8,6 @@ use Article;
 use File;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
-use MediaWiki\Hook\TitleSquidURLsHook;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use ReflectionException;
@@ -17,7 +16,7 @@ use Title;
 use WikiFilePage;
 use WikiPage;
 
-class PurgeHooks implements	LocalFilePurgeThumbnailsHook, TitleSquidURLsHook, ArticlePurgeHook {
+class PurgeHooks implements	LocalFilePurgeThumbnailsHook, ArticlePurgeHook {
 
 	/**
 	 * Retrieve a list of thumbnail URLs that needs to be purged
@@ -30,24 +29,6 @@ class PurgeHooks implements	LocalFilePurgeThumbnailsHook, TitleSquidURLsHook, Ar
 	 */
 	public function onLocalFilePurgeThumbnails( $file, $archiveName, $urls ): void {
 		$this->runPurge( $urls );
-	}
-
-	/**
-	 * Retrieve a list of URLs that needs to be purged
-	 *
-	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/TitleSquidURLs
-	 *
-	 * @param Title $title Title object to purge
-	 * @param string[] &$urls Array of URLs to purge from the caches, to be manipulated
-	 */
-	public function onTitleSquidURLs( $title, &$urls ): void {
-		if ( !$this->isFile( $title ) ) {
-			return;
-		}
-
-		if ( !empty( $urls ) ) {
-			$this->runPurge( $urls );
-		}
 	}
 
 	/**
