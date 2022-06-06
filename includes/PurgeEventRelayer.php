@@ -32,7 +32,7 @@ class PurgeEventRelayer extends EventRelayer {
 		wfDebugLog( 'MultiPurge', 'Running Job' );
 
 		$job = new MultiPurgeJob( [
-			'urls' => $urls,
+			'urls' => array_unique( $urls ),
 		] );
 
 		$status = $job->run();

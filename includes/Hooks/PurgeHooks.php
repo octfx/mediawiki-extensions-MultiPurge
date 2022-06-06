@@ -165,7 +165,8 @@ class PurgeHooks implements	LocalFilePurgeThumbnailsHook, TitleSquidURLsHook, Ar
 			'urls' => array_unique( $urls ),
 		] );
 
-		$status = $job->run();
+		$result = MediaWikiServices::getInstance()->getJobRunner()->executeJob( $job );
+		$status = $result['status'];
 
 		wfDebugLog(
 			'MultiPurge',
