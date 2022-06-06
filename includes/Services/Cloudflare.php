@@ -24,6 +24,13 @@ class Cloudflare implements PurgeServiceInterface {
 
 	public function setup(): void {
 		wfDebugLog( 'MultiPurge', 'Setup Cloudflare' );
+	}
+
+	public function getPurgeRequest( $urls ): array {
+		if ( !is_array( $urls ) ) {
+			$urls = [ $urls ];
+		}
+
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
 
@@ -31,20 +38,15 @@ class Cloudflare implements PurgeServiceInterface {
 			"https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
 			[
 				'method' => 'POST',
-				'userAgent' => 'MediaWiki/ext-multipurge'
+				'userAgent' => 'MediaWiki/ext-multipurge',
+				'postData' => json_encode( [ 'files' => $urls ] ),
 			]
 		);
 
 		$this->request->setHeader( 'Authorization', sprintf( 'Bearer %s', $apiToken ) );
 		$this->request->setHeader( 'Content-Type', 'application/json' );
-	}
 
-	public function getPurgeRequest( $urls ): array {
-		if ( !is_array( $urls ) ) {
-			$urls = [ $urls ];
-		}
 		wfDebugLog( 'MultiPurge', sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls ) ) );
-		$this->request->setData( [ 'files' => $urls ] );
 
 		return [ $this->request ];
 	}
