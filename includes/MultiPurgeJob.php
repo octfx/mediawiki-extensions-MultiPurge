@@ -14,7 +14,6 @@ use MediaWiki\Extension\MultiPurge\Services\Varnish;
 use MediaWiki\MediaWikiServices;
 use ReflectionClass;
 use ReflectionException;
-use Status;
 
 class MultiPurgeJob extends Job implements GenericParameterJob {
 	/**
@@ -39,7 +38,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 	public function __construct( array $params ) {
 		parent::__construct( 'multiPurge', $params );
-		$this->removeDuplicates = false;
+		$this->removeDuplicates = true;
 
 		$this->extensionConfig = MediaWikiServices::getInstance()
 			->getConfigFactory()
@@ -110,11 +109,11 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			];
 		}
 
-		return array_reduce( $statuses, static function ( bool $carry, array $data) {
+		return array_reduce( $statuses, static function ( bool $carry, array $data ) {
 			if ( !$data[1]->isGood() ) {
 				$status = $data[1]->getMessage()->plain();
 				wfLogWarning( $status );
-				wfDebugLog('MultiPurge', sprintf('Result for request %s: %s', $data[0], $status));
+				wfDebugLog( 'MultiPurge', sprintf( 'Result for request %s: %s', $data[0], $status ) );
 			}
 
 			return $carry && $data[1]->isGood();
@@ -168,5 +167,9 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		$this->serviceContainer[$class] = $instance;
 
 		return $instance;
+	}
+
+	public function allowRetries() {
+		return false;
 	}
 }

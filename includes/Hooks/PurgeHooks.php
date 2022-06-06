@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
@@ -38,7 +38,7 @@ class PurgeHooks implements	LocalFilePurgeThumbnailsHook, TitleSquidURLsHook, Ar
 	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/TitleSquidURLs
 	 *
 	 * @param Title $title Title object to purge
-	 * @param string[] $urls Array of URLs to purge from the caches, to be manipulated
+	 * @param string[] &$urls Array of URLs to purge from the caches, to be manipulated
 	 */
 	public function onTitleSquidURLs( $title, &$urls ): void {
 		if ( !$this->isFile( $title ) ) {
@@ -159,21 +159,21 @@ class PurgeHooks implements	LocalFilePurgeThumbnailsHook, TitleSquidURLsHook, Ar
 	 * @param array $urls
 	 */
 	private function runPurge( array $urls ): void {
-        wfDebugLog( 'MultiPurge', 'Running Job from PurgeHooks' );
+		wfDebugLog( 'MultiPurge', 'Running Job from PurgeHooks' );
 
-        $job = new MultiPurgeJob( [
-            'urls' => $urls,
-        ] );
+		$job = new MultiPurgeJob( [
+			'urls' => array_unique( $urls ),
+		] );
 
-        $status = $job->run();
+		$status = $job->run();
 
-        wfDebugLog(
-            'MultiPurge',
-            sprintf(
-                'Job Status: %s',
-                ( $status === true ? 'success' : 'error' )
-            )
-        );
+		wfDebugLog(
+			'MultiPurge',
+			sprintf(
+				'Job Status: %s',
+				( $status === true ? 'success' : 'error' )
+			)
+		);
 	}
 
 	/**
