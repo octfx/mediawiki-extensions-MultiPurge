@@ -104,15 +104,21 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		foreach ( $requests as $request ) {
 			wfDebugLog( 'MultiPurge', sprintf( 'Executing: %s', $request->getFinalUrl() ) );
 
-			$statuses[] = $request->execute();
+			$statuses[] = [
+				$request->getFinalUrl(),
+				$request->execute()
+			];
 		}
 
-		return array_reduce( $statuses, static function ( bool $carry, Status $status ) {
-			if ( !$status->isGood() ) {
-				wfLogWarning( $status->getMessage()->plain() );
+		return array_reduce( $statuses, static function ( bool $carry, array $data) {
+			$status = $data[1]->getMessage()->plain();
+			wfDebugLog('MultiPurge', sprintf('Result for request %s: %s', $data[0], $status));
+
+			if ( !$data[1]->isGood() ) {
+				wfLogWarning( $status );
 			}
 
-			return $carry && $status->isGood();
+			return $carry && $data[1]->isGood();
 		}, true );
 	}
 
