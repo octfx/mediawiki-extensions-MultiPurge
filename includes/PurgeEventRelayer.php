@@ -35,14 +35,13 @@ class PurgeEventRelayer extends EventRelayer {
 			'urls' => $urls,
 		] );
 
-		[ $status, $error, $caught, $timeMs ] = MediaWikiServices::getInstance()->getJobRunner()->executeJob( $job );
+		$status = $job->run();
 
 		wfDebugLog(
 			'MultiPurge',
 			sprintf(
-				'Job Status: %s (%s)',
-				( $status === true ? 'success' : 'error' ),
-				empty( $error ) ? 'No Error' : $error
+				'Job Status: %s',
+				( $status === true ? 'success' : 'error' )
 			)
 		);
 	}
