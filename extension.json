@@ -9,7 +9,7 @@
 	"license-name": "GPL-2.0-or-later",
 	"type": "parserhook",
 	"requires": {
-		"MediaWiki": ">= 1.35.0",
+		"MediaWiki": ">= 1.35.2",
 		"platform": {
 			"php": ">=7.2.0"
 		}
@@ -47,11 +47,15 @@
 	"AutoloadNamespaces": {
 		"MediaWiki\\Extension\\MultiPurge\\": "includes/"
 	},
-	"HookHandlers": {
-
-	},
 	"Hooks": {
-
+		"LocalFilePurgeThumbnails": "purge",
+		"TitleSquidURLs": "purge",
+		"ArticlePurge": "purge"
+	},
+	"HookHandlers": {
+		"purge": {
+			"class": "MediaWiki\\Extension\\MultiPurge\\Hooks\\PurgeHooks"
+		}
 	},
 	"ExtensionFunctions": [
 		"MediaWiki\\Extension\\MultiPurge\\Hooks\\MainHooks::setup"
