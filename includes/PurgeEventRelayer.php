@@ -5,7 +5,6 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge;
 
 use EventRelayer;
-use Exception;
 use MediaWiki\MediaWikiServices;
 
 class PurgeEventRelayer extends EventRelayer {
@@ -36,12 +35,15 @@ class PurgeEventRelayer extends EventRelayer {
 			'urls' => $urls,
 		] );
 
-		try {
-			$job->run();
-		} catch ( Exception $e ) {
-			wfDebugLog( 'MultiPurge', $e->getMessage() );
-		}
+		[ $status, $error, $caught, $timeMs ] = MediaWikiServices::getInstance()->getJobRunner()->executeJob( $job );
 
-		// MediaWikiServices::getInstance()->getJobRunner()->executeJob( $job );
+		wfDebugLog(
+			'MultiPurge',
+			sprintf(
+				'Job Status: %s (%s)',
+				( $status === true ? 'success' : 'error' ),
+				empty( $error ) ? 'No Error' : $error
+			)
+		);
 	}
 }

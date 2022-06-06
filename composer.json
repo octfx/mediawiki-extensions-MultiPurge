@@ -39,5 +39,10 @@
 	},
 	"extra": {
 		"installer-name": "MultiPurge"
+	},
+	"config": {
+		"allow-plugins": {
+			"composer/installers": true
+		}
 	}
 }
