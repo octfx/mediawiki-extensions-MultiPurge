@@ -26,7 +26,6 @@ class Cloudflare implements PurgeServiceInterface {
 		wfDebugLog( 'MultiPurge', 'Setup Cloudflare' );
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
-		$accountId = $this->extensionConfig->get( 'MultiPurgeCloudFlareAccountId' );
 
 		$this->request = $this->requestFactory->create(
 			"https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
@@ -36,7 +35,6 @@ class Cloudflare implements PurgeServiceInterface {
 			]
 		);
 
-		$this->request->setHeader( 'X-Auth-Key', $accountId );
 		$this->request->setHeader( 'Authorization', sprintf( 'Bearer %s', $apiToken ) );
 		$this->request->setHeader( 'Content-Type', 'application/json' );
 	}

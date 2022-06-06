@@ -23,10 +23,6 @@
 			"description": "",
 			"value": null
 		},
-		"MultiPurgeCloudFlareAccountId": {
-			"description": "",
-			"value": null
-		},
 		"MultiPurgeVarnishServers": {
 			"description": "",
 			"value": null
