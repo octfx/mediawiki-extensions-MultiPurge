@@ -149,16 +149,22 @@ class SpecialPurgeResources extends SpecialPage {
 		if ( $styleCount !== false && $styleCount > 0 ) {
 			array_shift( $styles );
 			$styles = array_filter( $styles[0] ?? [] );
+		} else {
+			$styles = [];
 		}
 
 		if ( $scriptCount !== false && $scriptCount > 0 ) {
 			array_shift( $scripts );
 			$scripts = array_filter( $scripts[0] ?? [] );
+		} else {
+			$scripts = [];
 		}
 
 		if ( $imageCount !== false && $imageCount > 0 ) {
 			array_shift( $images );
-			$images = array_filter( $images[0] ?? [] );
+			$images = array_filter( array_map( 'array_filter', $images[0] ?? [] ) );
+		} else {
+			$images = [];
 		}
 
 		return [

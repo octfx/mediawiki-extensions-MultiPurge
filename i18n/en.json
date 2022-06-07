@@ -15,5 +15,6 @@
 	"purge-resources-form-loads": "Load calls to purge",
 	"multipurge-special-purge-submit": "Purge Selected Resources",
 	"multipurge-special-load-submit": "Load Resources",
-	"multipurge-special-invalid-title": "Title does not exist"
+	"multipurge-special-invalid-title": "Title does not exist",
+	"purgeresources": "Purge Resources of a given title"
 }
