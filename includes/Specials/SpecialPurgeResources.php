@@ -167,11 +167,15 @@ class SpecialPurgeResources extends SpecialPage {
 			$images = [];
 		}
 
-		return [
+		$data = [
 			'scripts' => $scripts,
 			'styles' => $styles,
 			'images' => $images,
 		];
+
+		wfDebugLog( 'MultiPurge', sprintf( 'Parsed loads: %s', json_encode( $data ) ) );
+
+		return $data;
 	}
 
 	/**
