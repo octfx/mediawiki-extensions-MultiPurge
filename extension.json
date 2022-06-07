@@ -59,5 +59,8 @@
 	"ExtensionFunctions": [
 		"MediaWiki\\Extension\\MultiPurge\\Hooks\\MainHooks::setup"
 	],
+	"SpecialPages":{
+		"PurgeResources": "MediaWiki\\Extension\\MultiPurge\\Specials\\SpecialPurgeResources"
+	},
 	"manifest_version": 2
 }

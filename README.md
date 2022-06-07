@@ -19,3 +19,13 @@ For a custom CDN purger:
 | `$wgMultiPurgeVarnishServers`          | null             | String/Array - Array of URLs pointing to your Varnish Servers. Can be IPs                                                                               |
 | `$wgMultiPurgeEnabledServices`         | null             | Array - List of enabled services. Possible values are 'Cloudflare', 'Varnish'                                                                           |
 | `$wgMultiPurgeServiceOrder`            | null             | Array - List of service purge order. Possible values are 'Cloudflare', 'Varnish'. Example: ['Varnish', 'Cloudflare'] purges varnish, then cloudflare    |
+
+
+## Special Page
+MultiPurge adds a special page for sysops which allows purging of `load.php` urls.  
+The page can be found at Special:PurgeResources.  
+
+Only users with `editinterface` permissions can access this page.  
+
+The page works by requesting the actual html output of a given title, and parsing all `load.php` calls.  
+All found links can then be selected to be purged.

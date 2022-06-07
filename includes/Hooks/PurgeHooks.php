@@ -152,15 +152,15 @@ class PurgeHooks implements	LocalFilePurgeThumbnailsHook, ArticlePurgeHook {
 			'urls' => $urls,
 		] );
 
-        $status = $job->run();
+		$status = $job->run();
 
-        wfDebugLog(
-            'MultiPurge',
-            sprintf(
-                'Job Status: %s',
-                ( $status === true ? 'success' : 'error' )
-            )
-        );
+		wfDebugLog(
+			'MultiPurge',
+			sprintf(
+				'Job Status: %s',
+				( $status === true ? 'success' : 'error' )
+			)
+		);
 	}
 
 	/**
