@@ -12,11 +12,6 @@ class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
 	private $requestFactory;
 
-	/**
-	 * @var MWHttpRequest
-	 */
-	private $request;
-
 	public function __construct( Config $extensionConfig, HttpRequestFactory $requestFactory ) {
 		$this->extensionConfig = $extensionConfig;
 		$this->requestFactory = $requestFactory;
@@ -26,15 +21,38 @@ class Cloudflare implements PurgeServiceInterface {
 		wfDebugLog( 'MultiPurge', 'Setup Cloudflare' );
 	}
 
+	/**
+	 * Returns as array of purge requests
+	 * Chunks the request of count($urls) > 30
+	 *
+	 * @param $urls
+	 * @return MWHttpRequest[]
+	 */
 	public function getPurgeRequest( $urls ): array {
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
 		}
 
+		$requests = [];
+
+		foreach ( array_chunk( $urls, 30 ) as $chunk ) {
+			$requests = array_merge( $requests, $this->makeRequest( $chunk ) );
+		}
+
+		return $requests;
+	}
+
+	/**
+	 * Create the actual request for the given urls
+	 *
+	 * @param array $urls
+	 * @return MWHttpRequest[]
+	 */
+	private function makeRequest( array $urls ): array {
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
 
-		$this->request = $this->requestFactory->create(
+		$request = $this->requestFactory->create(
 			"https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
 			[
 				'method' => 'POST',
@@ -43,11 +61,11 @@ class Cloudflare implements PurgeServiceInterface {
 			]
 		);
 
-		$this->request->setHeader( 'Authorization', sprintf( 'Bearer %s', $apiToken ) );
-		$this->request->setHeader( 'Content-Type', 'application/json' );
+		$request->setHeader( 'Authorization', sprintf( 'Bearer %s', $apiToken ) );
+		$request->setHeader( 'Content-Type', 'application/json' );
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls ) ) );
 
-		return [ $this->request ];
+		return [ $request ];
 	}
 }
