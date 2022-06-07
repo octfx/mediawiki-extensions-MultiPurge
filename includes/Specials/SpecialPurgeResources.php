@@ -108,11 +108,15 @@ class SpecialPurgeResources extends SpecialPage {
 		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
 
 		foreach ( $formData['stylesmultiselect'] as $selected ) {
-			$urls[] = sprintf( '%s%s', $server, $selected );
+			$urls[] = html_entity_decode( sprintf( '%s%s', $server, $selected ) );
 		}
 
 		foreach ( $formData['scriptsmultiselect'] as $selected ) {
-			$urls[] = sprintf( '%s%s', $server, $selected );
+			$urls[] = html_entity_decode( sprintf( '%s%s', $server, $selected ) );
+		}
+
+		foreach ( $formData['thumbsmultiselect'] as $selected ) {
+			$urls[] = html_entity_decode( sprintf( '%s%s', $server, $selected ) );
 		}
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Purging urls from Special Page: %s', json_encode( $urls ) ) );
@@ -123,7 +127,7 @@ class SpecialPurgeResources extends SpecialPage {
 			] );
 
 			if ( $job->run() ) {
-				return 'multipurge-special-purge-success';
+				return true;
 			}
 
 			return 'multipurge-special-purge-error';
@@ -175,7 +179,15 @@ class SpecialPurgeResources extends SpecialPage {
 			'images' => $images,
 		];
 
-		wfDebugLog( 'MultiPurge', sprintf( 'Parsed loads: %s', json_encode( $data ) ) );
+		wfDebugLog(
+			'MultiPurge',
+			sprintf(
+				'Parsed - Scripts: %d; Styles %d; Thumbs %d',
+				count( $data['scripts'] ),
+				count( $data['styles'] ),
+				count( $data['images'] )
+			)
+		);
 
 		return $data;
 	}
