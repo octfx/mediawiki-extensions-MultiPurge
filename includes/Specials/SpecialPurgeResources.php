@@ -31,7 +31,7 @@ class SpecialPurgeResources extends SpecialPage {
 		$formDescriptor = [
 			'target' => [
 				'section' => 'title',
-				'class' => 'HTMLTextField', // same as type 'text'
+				'class' => 'HTMLTextField',
 				'required' => true,
 				'default' => !empty( $sub ) ? $sub : null,
 			],
@@ -81,7 +81,9 @@ class SpecialPurgeResources extends SpecialPage {
 			return false;
 		}
 
-		$content = MediaWikiServices::getInstance()->getHttpRequestFactory()->get( $title->getFullURL() );
+		$content = MediaWikiServices::getInstance()->getHttpRequestFactory()->get(
+			$title->getFullURL( '', false, PROTO_HTTPS )
+		);
 
 		return $content ?? false;
 	}
@@ -138,13 +140,13 @@ class SpecialPurgeResources extends SpecialPage {
 	 */
 	private function parseLoads( string $content ): array {
 		// Styles
-		$styleCount = preg_match_all( '/href="(\/load.php?.*)"\/>/', $content, $styles );
+		$styleCount = preg_match_all( '/href="(\/load.php\?.*)"\/>/U', $content, $styles );
 
 		// Scripts
-		$scriptCount = preg_match_all( '/src="(\/load.php?.*)"><\/script>/', $content, $scripts );
+		$scriptCount = preg_match_all( '/src="(\/load.php\?.*)"><\/script>/U', $content, $scripts );
 
 		// Thumbs
-		$imageCount = preg_match_all( '/<img alt=".+" src="(.*)" decoding/', $content, $images );
+		$imageCount = preg_match_all( '/<img alt=".+" src="(.*)" decoding/U', $content, $images );
 
 		if ( $styleCount !== false && $styleCount > 0 ) {
 			array_shift( $styles );
@@ -162,7 +164,7 @@ class SpecialPurgeResources extends SpecialPage {
 
 		if ( $imageCount !== false && $imageCount > 0 ) {
 			array_shift( $images );
-			$images = array_filter( array_map( 'array_filter', $images[0] ?? [] ) );
+			$images = array_filter( $images[0] ?? [] );
 		} else {
 			$images = [];
 		}
