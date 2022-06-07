@@ -127,7 +127,8 @@ class SpecialPurgeResources extends SpecialPage {
 			] );
 
 			if ( $job->run() ) {
-				return true;
+				# TODO How to return success?
+				return 'multipurge-special-purge-success';
 			}
 
 			return 'multipurge-special-purge-error';
