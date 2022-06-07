@@ -131,7 +131,7 @@ class SpecialPurgeResources extends SpecialPage {
 	}
 
 	/**
-	 * Parse the page content and extract load.php calls
+	 * Parse the page content and extract load.php calls and images
 	 *
 	 * @param string $content
 	 * @return array
@@ -143,22 +143,28 @@ class SpecialPurgeResources extends SpecialPage {
 		// Scripts
 		$scriptCount = preg_match_all( '/src="(\/load.php?.*)"><\/script>/', $content, $scripts );
 
-		$mapper = static function ( array $data ) { return $data[0] ?? null;
-		};
+		// Thumbs
+		$imageCount = preg_match_all( '/<img alt=".+" src="(.*)" decoding/', $content, $images );
 
 		if ( $styleCount !== false && $styleCount > 0 ) {
 			array_shift( $styles );
-			$styles = array_filter( array_map( $mapper, $styles ?? [] ) );
+			$styles = array_filter( $styles[0] ?? [] );
 		}
 
 		if ( $scriptCount !== false && $scriptCount > 0 ) {
 			array_shift( $scripts );
-			$scripts = array_filter( array_map( $mapper, $scripts ?? [] ) );
+			$scripts = array_filter( $scripts[0] ?? [] );
+		}
+
+		if ( $imageCount !== false && $imageCount > 0 ) {
+			array_shift( $images );
+			$images = array_filter( $images[0] ?? [] );
 		}
 
 		return [
 			'scripts' => $scripts,
 			'styles' => $styles,
+			'images' => $images,
 		];
 	}
 
@@ -169,22 +175,24 @@ class SpecialPurgeResources extends SpecialPage {
 	 * @return array[]
 	 */
 	private function makeSelects( array $loads ): array {
-		$mapper = static function ( $data ) {
-			return [ $data => $data ];
-		};
-
 		return [
 			'stylesmultiselect' => [
 				'section' => 'loads',
 				'class' => 'HTMLMultiSelectField',
 				'label-message' => 'multipurge-styles-input',
-				'options' => array_map( $mapper, $loads['styles'] ),
+				'options' => array_combine( $loads['styles'], $loads['styles'] ),
 			],
 			'scriptsmultiselect' => [
 				'section' => 'loads',
 				'class' => 'HTMLMultiSelectField',
 				'label-message' => 'multipurge-scripts-input',
-				'options' => array_map( $mapper, $loads['scripts'] ),
+				'options' => array_combine( $loads['scripts'], $loads['scripts'] ),
+			],
+			'thumbsmultiselect' => [
+				'section' => 'loads',
+				'class' => 'HTMLMultiSelectField',
+				'label-message' => 'multipurge-thumbs-input',
+				'options' => array_combine( $loads['images'], $loads['images'] ),
 			],
 		];
 	}
