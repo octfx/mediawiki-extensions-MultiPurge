@@ -4,6 +4,7 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Specials;
 
+use ConfigException;
 use HTMLForm;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\MediaWikiServices;
@@ -94,7 +95,7 @@ class SpecialPurgeResources extends SpecialPage {
 	 * @return string|void
 	 */
 	public static function trySubmit( $formData, $form ) {
-		if ( !isset( $formData['stylesmultiselect'] ) ) {
+		if ( !isset( $formData['styles'] ) ) {
 			$form->getOutput()->redirect(
 				MediaWikiServices::getInstance()->getTitleFactory()
 					->makeTitle( NS_SPECIAL, sprintf( 'PurgeResources/%s', $formData['target'] ) )
@@ -104,20 +105,18 @@ class SpecialPurgeResources extends SpecialPage {
 			return;
 		}
 
-		$urls = [];
 		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
 
-		foreach ( $formData['stylesmultiselect'] as $selected ) {
-			$urls[] = html_entity_decode( sprintf( '%s%s', $server, $selected ) );
-		}
+		$mapper = static function ( string $url ) use ( $server ) {
+			return html_entity_decode( sprintf( '%s/%s', $server, ltrim( $url, '/' ) ) );
+		};
 
-		foreach ( $formData['scriptsmultiselect'] as $selected ) {
-			$urls[] = html_entity_decode( sprintf( '%s%s', $server, $selected ) );
-		}
-
-		foreach ( $formData['thumbsmultiselect'] as $selected ) {
-			$urls[] = html_entity_decode( sprintf( '%s%s', $server, $selected ) );
-		}
+		$urls = array_filter( array_unique( array_merge(
+			array_map( $mapper, $formData['styles'] ?? [] ),
+			array_map( $mapper, $formData['scripts'] ?? [] ),
+			array_map( $mapper, $formData['thumbs'] ?? [] ),
+			array_map( $mapper, $formData['statics'] ?? [] ),
+		) ) );
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Purging urls from Special Page: %s', json_encode( $urls ) ) );
 
@@ -200,26 +199,42 @@ class SpecialPurgeResources extends SpecialPage {
 	 * @return array[]
 	 */
 	private function makeSelects( array $loads ): array {
-		return [
-			'stylesmultiselect' => [
+		try {
+			$statics = MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeStaticPurges' );
+		} catch ( ConfigException $e ) {
+			$statics = [];
+		}
+
+		$selects = [];
+
+		foreach ( [ 'styles', 'scripts', 'thumbs' ] as $group ) {
+			if ( empty( $loads[$group] ) ) {
+				continue;
+			}
+
+			$selects[$group] = [
 				'section' => 'loads',
 				'class' => 'HTMLMultiSelectField',
-				'label-message' => 'multipurge-styles-input',
-				'options' => array_combine( $loads['styles'], $loads['styles'] ),
-			],
-			'scriptsmultiselect' => [
+				'label-message' => sprintf( 'multipurge-%s-label', $group ),
+				'options' => array_combine( $loads[$group], $loads[$group] ),
+			];
+		}
+
+		if ( !empty( $selects ) ) {
+			// Use path as key
+			if ( !is_string( array_keys( $statics )[0] ) ) {
+				$selects = array_combine( $statics, $statics );
+			}
+
+			$selects['statics'] = [
 				'section' => 'loads',
 				'class' => 'HTMLMultiSelectField',
-				'label-message' => 'multipurge-scripts-input',
-				'options' => array_combine( $loads['scripts'], $loads['scripts'] ),
-			],
-			'thumbsmultiselect' => [
-				'section' => 'loads',
-				'class' => 'HTMLMultiSelectField',
-				'label-message' => 'multipurge-thumbs-input',
-				'options' => array_combine( $loads['images'], $loads['images'] ),
-			],
-		];
+				'label-message' => 'multipurge-static-label',
+				'options' => $statics,
+			];
+		}
+
+		return $selects;
 	}
 
 	protected function getGroupName() {

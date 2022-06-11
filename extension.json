@@ -34,6 +34,13 @@
 		"MultiPurgeServiceOrder": {
 			"description": "Order of purge requests, e.g. [Varnish, Cloudflare]",
 			"value": null
+		},
+		"MultiPurgeStaticPurges": {
+			"description": "Array of urls that can be purged using the special page. Key is displayed as the selection label.",
+			"value": {
+				"Site Styles": "load.php?lang=de&modules=site.styles&only=styles&skin=citizen"
+			},
+			"_merge_strategy": "array_plus"
 		}
 	},
 	"ConfigRegistry": {

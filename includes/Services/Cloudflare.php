@@ -34,7 +34,7 @@ class Cloudflare implements PurgeServiceInterface {
 		}
 
 		// Protocolize urls
-		$urls = array_map( static function (string $url ) {
+		$urls = array_map( static function ( string $url ) {
 			if ( substr( $url, 0, 2 ) === '//' ) {
 				$url = sprintf( 'https:%s', $url );
 			}
