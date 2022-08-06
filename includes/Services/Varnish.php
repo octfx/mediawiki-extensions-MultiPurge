@@ -6,7 +6,7 @@ namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
 use MediaWiki\Http\HttpRequestFactory;
-use RuntimeException;
+use MongoDB\Driver\Exception\RuntimeException;
 
 class Varnish implements PurgeServiceInterface {
 	private $extensionConfig;
@@ -51,6 +51,18 @@ class Varnish implements PurgeServiceInterface {
 							'userAgent' => 'MediaWiki/ext-multipurge'
 						]
 					);
+
+					// Also purge only the path name
+					$pathOnlyUrl = $this->buildUrl( $parsedUrl, true );
+					if ( !empty( $parsedUrl ) ) {
+						$requests[] = $this->requestFactory->create(
+							$pathOnlyUrl,
+							[
+								'method' => 'PURGE',
+								'userAgent' => 'MediaWiki/ext-multipurge'
+							]
+						);
+					}
 				} catch ( RuntimeException $e ) {
 					wfLogWarning( sprintf( '[MultiPurge] %s', $e->getMessage() ) );
 					continue;
@@ -67,22 +79,27 @@ class Varnish implements PurgeServiceInterface {
 	 * Replaces the wikis host with the configured varnish host
 	 *
 	 * @param array $components
+	 * @param bool $pathOnly Return only the path of the url without a host
 	 * @return string
 	 */
-	private function buildUrl( array $components ): string {
-		$url = $components['scheme'] . '://';
+	private function buildUrl( array $components, bool $pathOnly = false ): string {
+		$url = '';
 
-		if ( isset( $components['username'], $components['password'] ) ) {
-			$url .= $components['username'] . ':' . $components['password'] . '@';
-		}
+		if ( $pathOnly === false ) {
+			$url = $components['scheme'] . '://';
 
-		$url .= $components['host'];
+			if ( isset( $components['username'], $components['password'] ) ) {
+				$url .= $components['username'] . ':' . $components['password'] . '@';
+			}
 
-		if ( isset( $components['port'] ) &&
-			( ( $components['scheme'] === 'http' && $components['port'] !== 80 ) ||
-				( $components['scheme'] === 'https' && $components['port'] !== 443 ) )
-		) {
-			$url .= ':' . $components['port'];
+			$url .= $components['host'];
+
+			if ( isset( $components['port'] ) &&
+				( ( $components['scheme'] === 'http' && $components['port'] !== 80 ) ||
+					( $components['scheme'] === 'https' && $components['port'] !== 443 ) )
+			) {
+				$url .= ':' . $components['port'];
+			}
 		}
 
 		if ( isset( $components['path'] ) ) {
