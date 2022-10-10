@@ -6,7 +6,7 @@ namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
 use MediaWiki\Http\HttpRequestFactory;
-use MongoDB\Driver\Exception\RuntimeException;
+use RuntimeException;
 
 class Varnish implements PurgeServiceInterface {
 	private $extensionConfig;
