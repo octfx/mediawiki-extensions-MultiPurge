@@ -6,7 +6,8 @@ namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
 use MediaWiki\Http\HttpRequestFactory;
-use MongoDB\Driver\Exception\RuntimeException;
+use MediaWiki\MediaWikiServices;
+use RuntimeException;
 
 class Varnish implements PurgeServiceInterface {
 	private $extensionConfig;
@@ -23,6 +24,8 @@ class Varnish implements PurgeServiceInterface {
 
 	public function getPurgeRequest( $urls ): array {
 		$varnishServers = $this->extensionConfig->get( 'MultiPurgeVarnishServers' );
+        $server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
+        $host = parse_url( $server )['host'];
 
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
@@ -32,7 +35,6 @@ class Varnish implements PurgeServiceInterface {
 
 		foreach ( $urls as $url ) {
 			$parsedUrl = parse_url( $url );
-
 			foreach ( $varnishServers as $varnishServer ) {
 				if ( filter_var( $varnishServer, FILTER_VALIDATE_IP ) ) {
 					$parsedUrl['scheme'] = 'http';
@@ -44,24 +46,21 @@ class Varnish implements PurgeServiceInterface {
 				}
 
 				try {
-					$requests[] = $this->requestFactory->create(
-						$this->buildUrl( $parsedUrl ),
-						[
-							'method' => 'PURGE',
-							'userAgent' => 'MediaWiki/ext-multipurge'
-						]
-					);
-
-					// Also purge only the path name
+                    // Based on https://varnish-cache.org/docs/4.0/users-guide/purging.html
+                    // Make PURGE request without host, but only the path
 					$pathOnlyUrl = $this->buildUrl( $parsedUrl, true );
+
 					if ( !empty( $parsedUrl ) ) {
-						$requests[] = $this->requestFactory->create(
+                        $request = $this->requestFactory->create(
 							$pathOnlyUrl,
 							[
 								'method' => 'PURGE',
 								'userAgent' => 'MediaWiki/ext-multipurge'
 							]
 						);
+
+                        $request->setHeader( 'Host', $host );
+                        $requests[] = $request;
 					}
 				} catch ( RuntimeException $e ) {
 					wfLogWarning( sprintf( '[MultiPurge] %s', $e->getMessage() ) );
