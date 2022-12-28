@@ -24,8 +24,8 @@ class Varnish implements PurgeServiceInterface {
 
 	public function getPurgeRequest( $urls ): array {
 		$varnishServers = $this->extensionConfig->get( 'MultiPurgeVarnishServers' );
-        $server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
-        $host = parse_url( $server )['host'];
+		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
+		$host = parse_url( $server )['host'];
 
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
@@ -46,12 +46,12 @@ class Varnish implements PurgeServiceInterface {
 				}
 
 				try {
-                    // Based on https://varnish-cache.org/docs/4.0/users-guide/purging.html
-                    // Make PURGE request without host, but only the path
+					// Based on https://varnish-cache.org/docs/4.0/users-guide/purging.html
+					// Make PURGE request without host, but only the path
 					$pathOnlyUrl = $this->buildUrl( $parsedUrl, true );
 
 					if ( !empty( $parsedUrl ) ) {
-                        $request = $this->requestFactory->create(
+						$request = $this->requestFactory->create(
 							$pathOnlyUrl,
 							[
 								'method' => 'PURGE',
@@ -59,8 +59,8 @@ class Varnish implements PurgeServiceInterface {
 							]
 						);
 
-                        $request->setHeader( 'Host', $host );
-                        $requests[] = $request;
+						$request->setHeader( 'Host', $host );
+						$requests[] = $request;
 					}
 				} catch ( RuntimeException $e ) {
 					wfLogWarning( sprintf( '[MultiPurge] %s', $e->getMessage() ) );
