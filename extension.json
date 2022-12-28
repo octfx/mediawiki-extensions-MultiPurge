@@ -51,6 +51,9 @@
 			"i18n"
 		]
 	},
+	"ExtensionMessagesFiles": {
+		"MultiPurgeAlias": "MultiPurge.alias.php"
+	},
 	"AutoloadNamespaces": {
 		"MediaWiki\\Extension\\MultiPurge\\": "includes/"
 	},
