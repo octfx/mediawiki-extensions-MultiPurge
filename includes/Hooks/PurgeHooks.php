@@ -5,18 +5,21 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
 use Article;
+use EditPage;
 use File;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
+use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use ReflectionException;
 use ReflectionObject;
+use Status;
 use Title;
 use WikiFilePage;
 use WikiPage;
 
-class PurgeHooks implements	LocalFilePurgeThumbnailsHook, ArticlePurgeHook {
+class PurgeHooks implements	LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 	/**
 	 * Retrieve a list of thumbnail URLs that needs to be purged
@@ -173,5 +176,15 @@ class PurgeHooks implements	LocalFilePurgeThumbnailsHook, ArticlePurgeHook {
 		}
 
 		return $page instanceof WikiFilePage && $page->getTitle() !== null && $page->getTitle()->getNamespace() === NS_FILE;
+	}
+
+	/**
+	 * @param EditPage $editpage_Obj
+	 * @param Status $status
+	 * @param $resultDetails
+	 * @return void
+	 */
+	public function onEditPage__attemptSave_after( $editpage_Obj, $status, $resultDetails ) {
+		$this->runPurge( [ $editpage_Obj->getTitle()->getFullURL() ] );
 	}
 }

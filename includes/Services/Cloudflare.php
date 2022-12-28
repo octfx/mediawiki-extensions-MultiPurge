@@ -39,6 +39,10 @@ class Cloudflare implements PurgeServiceInterface {
 				$url = sprintf( 'https:%s', $url );
 			}
 
+			if ( substr( $url, 0, 5 ) === 'http:' ) {
+				$url = sprintf( 'https:%s', substr( $url, 5 ) );
+			}
+
 			return $url;
 		}, $urls );
 

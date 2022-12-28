@@ -69,6 +69,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled ) ) );
 
+		/** @var \MWHttpRequest[] $requests */
 		$requests = [];
 
 		foreach ( $enabled as $service ) {
