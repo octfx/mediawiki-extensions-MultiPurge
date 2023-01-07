@@ -19,7 +19,7 @@ use Title;
 use WikiFilePage;
 use WikiPage;
 
-class PurgeHooks implements	LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
+class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 	/**
 	 * Retrieve a list of thumbnail URLs that needs to be purged
