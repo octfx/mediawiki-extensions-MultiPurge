@@ -47,10 +47,24 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 		} elseif ( $wikiPage->getTitle() === null ) {
 			return;
 		} else {
-			$urls = [ $wikiPage->getSourceURL() ];
+			$urls = MediaWikiServices::getInstance()->getHtmlCacheUpdater()->getUrls( $wikiPage->getTitle() );
 		}
 
 		$this->runPurge( $urls );
+	}
+
+	/**
+	 * @param EditPage $editpage_Obj
+	 * @param Status $status
+	 * @param $resultDetails
+	 * @return void
+	 */
+	public function onEditPage__attemptSave_after( $editpage_Obj, $status, $resultDetails ) {
+		if ( $status->isGood() ) {
+			$this->runPurge(
+				MediaWikiServices::getInstance()->getHtmlCacheUpdater()->getUrls( $editpage_Obj->getTitle() )
+			);
+		}
 	}
 
 	/**
@@ -176,15 +190,5 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 		}
 
 		return $page instanceof WikiFilePage && $page->getTitle() !== null && $page->getTitle()->getNamespace() === NS_FILE;
-	}
-
-	/**
-	 * @param EditPage $editpage_Obj
-	 * @param Status $status
-	 * @param $resultDetails
-	 * @return void
-	 */
-	public function onEditPage__attemptSave_after( $editpage_Obj, $status, $resultDetails ) {
-		$this->runPurge( [ $editpage_Obj->getTitle()->getFullURL() ] );
 	}
 }
