@@ -8,12 +8,16 @@ use Article;
 use EditPage;
 use File;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
+use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
+use MediaWiki\ResourceLoader\Context;
+use MediaWiki\ResourceLoader\DerivativeContext;
 use ReflectionException;
 use ReflectionObject;
+use RequestContext;
 use Status;
 use Title;
 use WikiFilePage;
@@ -50,10 +54,16 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			$urls = MediaWikiServices::getInstance()->getHtmlCacheUpdater()->getUrls( $wikiPage->getTitle() );
 		}
 
+		$this->buildSiteModuleUrl( $wikiPage->getTitle(), $urls );
+
 		$this->runPurge( $urls );
 	}
 
 	/**
+	 * This is only here to purge site styles
+	 * Every other url is handled through PurgeEventRelayer
+	 *
+	 * @see PurgeEventRelayer
 	 * @param EditPage $editpage_Obj
 	 * @param Status $status
 	 * @param $resultDetails
@@ -61,9 +71,10 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 */
 	public function onEditPage__attemptSave_after( $editpage_Obj, $status, $resultDetails ) {
 		if ( $status->isGood() ) {
-			$this->runPurge(
-				MediaWikiServices::getInstance()->getHtmlCacheUpdater()->getUrls( $editpage_Obj->getTitle() )
-			);
+			$urls = [];
+			$this->buildSiteModuleUrl( $editpage_Obj->getTitle(), $urls );
+
+			$this->runPurge( $urls );
 		}
 	}
 
@@ -190,5 +201,39 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 		}
 
 		return $page instanceof WikiFilePage && $page->getTitle() !== null && $page->getTitle()->getNamespace() === NS_FILE;
+	}
+
+	/**
+	 * This manually builds the url for the site.styles module
+	 * Gets called after an edit to a MediaWiki:*.css page
+	 *
+	 * @param Title $title
+	 * @param array $urls
+	 * @return void
+	 */
+	private function buildSiteModuleUrl( Title $title, array &$urls ): void {
+		if ( $title->getNamespace() !== NS_MEDIAWIKI || substr( $title->getText(), -4 ) !== '.css' ) {
+			return;
+		}
+
+		$config = MediaWikiServices::getInstance()->getMainConfig();
+
+		$request = RequestContext::getMain();
+
+		$rl = MediaWikiServices::getInstance()->getResourceLoader();
+		$rlContext = new Context(
+			$rl,
+			$request->getRequest()
+		);
+
+		$derive = new DerivativeContext( $rlContext );
+		$derive->setModules( [ 'site.styles' ] );
+		$derive->setLanguage( $config->get( 'LanguageCode' ) );
+		$derive->setSkin( $request->getSkin()->getSkinName() );
+		$derive->setOnly( 'styles' );
+
+		$url = $rl->createLoaderURL( 'local', $derive );
+
+		$urls[] = MediaWikiServices::getInstance()->getUrlUtils()->expand( $url );
 	}
 }

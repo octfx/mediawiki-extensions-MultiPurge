@@ -59,7 +59,8 @@
 	},
 	"Hooks": {
 		"LocalFilePurgeThumbnails": "purge",
-		"ArticlePurge": "purge"
+		"ArticlePurge": "purge",
+		"EditPage::attemptSave:after": "purge"
 	},
 	"HookHandlers": {
 		"purge": {
