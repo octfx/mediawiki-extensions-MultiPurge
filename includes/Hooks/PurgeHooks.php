@@ -180,15 +180,18 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			'urls' => $urls,
 		] );
 
-		$status = $job->run();
-
-		wfDebugLog(
-			'MultiPurge',
-			sprintf(
-				'Job Status: %s',
-				( $status === true ? 'success' : 'error' )
-			)
-		);
+		if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
+			MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
+		} else {
+			$status = $job->run();
+			wfDebugLog(
+				'MultiPurge',
+				sprintf(
+					'Job Status: %s',
+					( $status === true ? 'success' : 'error' )
+				)
+			);
+		}
 	}
 
 	/**

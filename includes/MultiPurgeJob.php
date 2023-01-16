@@ -37,7 +37,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	];
 
 	public function __construct( array $params ) {
-		parent::__construct( 'multiPurge', $params );
+		parent::__construct( 'MultiPurgePages', $params );
 		$this->removeDuplicates = true;
 
 		$this->extensionConfig = MediaWikiServices::getInstance()
