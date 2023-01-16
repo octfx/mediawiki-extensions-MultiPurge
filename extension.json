@@ -1,8 +1,8 @@
 {
 	"name": "MultiPurge",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"author": [
-		"Octfx"
+		"[https://www.mediawiki.org/wiki/User:Octfx Octfx]"
 	],
 	"url": "https://www.mediawiki.org/wiki/Extension:MultiPurge",
 	"descriptionmsg": "multipurge-desc",
@@ -41,6 +41,10 @@
 				"Site Styles": "load.php?lang=de&modules=site.styles&only=styles&skin=citizen"
 			},
 			"_merge_strategy": "array_plus"
+		},
+		"MultiPurgeRunInQueue": {
+			"description": "Push purge jobs to the job queue instead of running it in sync.",
+			"value": false
 		}
 	},
 	"ConfigRegistry": {
@@ -72,6 +76,9 @@
 	],
 	"SpecialPages":{
 		"PurgeResources": "MediaWiki\\Extension\\MultiPurge\\Specials\\SpecialPurgeResources"
+	},
+	"JobClasses": {
+		"MultiPurgePages": "MediaWiki\\Extension\\MultiPurge\\MultiPurgeJob"
 	},
 	"manifest_version": 2
 }

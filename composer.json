@@ -1,6 +1,6 @@
 {
 	"name": "mediawiki/multipurge",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"type": "mediawiki-extension",
 	"description": "Purge multiple services like cloudflare and varnish on page modification",
 	"homepage": "https://www.mediawiki.org/wiki/Extension:MultiPurge",
