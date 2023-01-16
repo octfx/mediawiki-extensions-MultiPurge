@@ -1,8 +1,8 @@
 {
 	"name": "MultiPurge",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"author": [
-		"Octfx"
+		"[https://www.mediawiki.org/wiki/User:Octfx Octfx]"
 	],
 	"url": "https://www.mediawiki.org/wiki/Extension:MultiPurge",
 	"descriptionmsg": "multipurge-desc",
