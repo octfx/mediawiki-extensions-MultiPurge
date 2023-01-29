@@ -169,8 +169,4 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		return $instance;
 	}
-
-	public function allowRetries() {
-		return false;
-	}
 }
