@@ -54,7 +54,9 @@ class Varnish implements PurgeServiceInterface {
 							$parsedUrl,
 							[
 								'method' => 'PURGE',
-								'userAgent' => 'MediaWiki/ext-multipurge'
+								'userAgent' => 'MediaWiki/ext-multipurge',
+                                'timeout' => 30,
+                                'connectTimeout' => 30,
 							]
 						);
 

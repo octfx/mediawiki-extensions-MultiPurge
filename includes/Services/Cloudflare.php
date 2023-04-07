@@ -70,6 +70,8 @@ class Cloudflare implements PurgeServiceInterface {
 			[
 				'method' => 'POST',
 				'userAgent' => 'MediaWiki/ext-multipurge',
+                'timeout' => 30,
+                'connectTimeout' => 30,
 				'postData' => json_encode( [ 'files' => $urls ] ),
 			]
 		);
