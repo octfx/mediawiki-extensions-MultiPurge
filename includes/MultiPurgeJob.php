@@ -5,6 +5,7 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge;
 
 use Config;
+use Exception;
 use GenericParameterJob;
 use InvalidArgumentException;
 use Job;
@@ -39,17 +40,18 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	public function __construct( array $params ) {
 		parent::__construct( 'MultiPurgePages', $params );
 		$this->removeDuplicates = true;
+	}
 
+	/**
+	 * @throws \JsonException
+	 */
+	public function run(): bool {
 		$this->extensionConfig = MediaWikiServices::getInstance()
 			->getConfigFactory()
 			->makeConfig( 'MultiPurge' );
-	}
 
-	public function run(): bool {
-		$purgeConfig = MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' );
-
-		$services = $purgeConfig->get( 'MultiPurgeEnabledServices' );
-		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services: %s', json_encode( $services ) ) );
+		$services = $this->extensionConfig->get( 'MultiPurgeEnabledServices' );
+		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services: %s', json_encode( $services, JSON_THROW_ON_ERROR ) ) );
 
 		if ( empty( $services ) ) {
 			wfDebugLog( 'MultiPurge', 'Services empty' );
@@ -58,16 +60,19 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		$services = array_map( [ $this, 'normalizeServiceName' ], $services );
 
-		$serviceOrder = $purgeConfig->get( 'MultiPurgeServiceOrder' );
+		$serviceOrder = $this->extensionConfig->get( 'MultiPurgeServiceOrder' );
 
-		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
+		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder, JSON_THROW_ON_ERROR ) ) );
 		if ( !empty( $serviceOrder ) ) {
 			$serviceOrder = array_map( [ $this, 'normalizeServiceName' ], $serviceOrder );
 		}
 
 		$enabled = array_intersect( $serviceOrder, $services );
 
-		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled ) ) );
+		$http = MediaWikiServices::getInstance()->getHttpRequestFactory()
+			->createMultiClient( [ 'maxConnsPerHost' => 8, 'usePipelining' => true ] );
+
+		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled, JSON_THROW_ON_ERROR ) ) );
 
 		/** @var \MWHttpRequest[] $requests */
 		$requests = [];
@@ -91,7 +96,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			try {
 				$urls = $this->getPurgeService( $service )->getPurgeRequest( $urls );
 
-				$requests = array_merge( $requests, $urls );
+				$requests = [ ...$requests, ...$urls ];
 			} catch ( ReflectionException $e ) {
 				wfDebugLog( 'MultiPurge', $e->getMessage() );
 				wfLogWarning( sprintf( '[MultiPurge] Could not instantiate service "%s"', $service ) );
@@ -100,24 +105,24 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Calling %d purge urls', count( $requests ) ) );
 
-		$statuses = [];
-		foreach ( $requests as $request ) {
-			wfDebugLog( 'MultiPurge', sprintf( 'Executing: %s', $request->getFinalUrl() ) );
-
-			$statuses[] = [
-				$request->getFinalUrl(),
-				$request->execute()
-			];
+		try {
+			$statuses = $http->runMulti( $requests );
+		} catch ( Exception $e ) {
+			wfLogWarning( sprintf( '[MultiPurge]: %s', $e->getMessage() ) );
+			return false;
 		}
 
 		return array_reduce( $statuses, static function ( bool $carry, array $data ) {
-			if ( !$data[1]->isGood() ) {
-				$status = $data[1]->getMessage()->plain();
-				wfLogWarning( $status );
-				wfDebugLog( 'MultiPurge', sprintf( 'Result for request %s: %s', $data[0], $status ) );
+			[ $code, $reason, $headers, $body, $error ] = $data['response'];
+			$good = false;
+			if ( $code >= 200 && $code <= 299 ) {
+				$good = true;
+			} else {
+				$status = $body ?? $error;
+				wfDebugLog( 'MultiPurge', sprintf( 'Result for request %s is: %s', $data['url'], $status ) );
 			}
 
-			return $carry && $data[1]->isGood();
+			return $carry && $good;
 		}, true );
 	}
 
