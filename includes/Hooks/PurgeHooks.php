@@ -168,29 +168,30 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @param array $urls
 	 */
 	private function runPurge( array $urls ): void {
-		$urls = array_unique( $urls );
-
 		if ( empty( $urls ) ) {
 			return;
 		}
 
 		wfDebugLog( 'MultiPurge', 'Running Job from PurgeHooks' );
 
-		$job = new MultiPurgeJob( [
-			'urls' => $urls,
-		] );
+		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
+			$job = new MultiPurgeJob( [
+				'urls' => array_unique( $urls ),
+				'service' => $service,
+			] );
 
-		if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
-			MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
-		} else {
-			$status = $job->run();
-			wfDebugLog(
-				'MultiPurge',
-				sprintf(
-					'Job Status: %s',
-					( $status === true ? 'success' : 'error' )
-				)
-			);
+			if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
+				MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
+			} else {
+				$status = $job->run();
+				wfDebugLog(
+					'MultiPurge',
+					sprintf(
+						'Job Status: %s',
+						( $status === true ? 'success' : 'error' )
+					)
+				);
+			}
 		}
 	}
 
