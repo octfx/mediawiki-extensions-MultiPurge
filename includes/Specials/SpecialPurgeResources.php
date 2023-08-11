@@ -5,6 +5,7 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Specials;
 
 use ConfigException;
+use Exception;
 use HTMLForm;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\MediaWikiServices;
@@ -125,9 +126,13 @@ class SpecialPurgeResources extends SpecialPage {
 				'urls' => $urls,
 			] );
 
-			if ( $job->run() ) {
-				# TODO How to return success?
-				return 'multipurge-special-purge-success';
+			try {
+				if ( $job->run() ) {
+					# TODO How to return success?
+					return 'multipurge-special-purge-success';
+				}
+			} catch ( Exception $e ) {
+				// Fall through
 			}
 
 			return 'multipurge-special-purge-error';

@@ -5,6 +5,7 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
+use JsonException;
 use MWHttpRequest;
 
 class Cloudflare implements PurgeServiceInterface {
@@ -46,7 +47,12 @@ class Cloudflare implements PurgeServiceInterface {
 		$requests = [];
 
 		foreach ( array_chunk( $urls, 30 ) as $chunk ) {
-			$requests[] = $this->makeRequest( $chunk );
+			try {
+				$requests[] = $this->makeRequest( $chunk );
+			} catch ( JsonException $e ) {
+				// Shouldn't really happen
+				continue;
+			}
 		}
 
 		return $requests;
@@ -57,7 +63,7 @@ class Cloudflare implements PurgeServiceInterface {
 	 *
 	 * @param array $urls
 	 * @return MWHttpRequest[]
-	 * @throws \JsonException
+	 * @throws JsonException
 	 */
 	private function makeRequest( array $urls ): array {
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );

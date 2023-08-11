@@ -9,10 +9,12 @@ use Exception;
 use GenericParameterJob;
 use InvalidArgumentException;
 use Job;
+use JsonException;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\PurgeServiceInterface;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
 use MediaWiki\MediaWikiServices;
+use MWHttpRequest;
 use ReflectionClass;
 use ReflectionException;
 
@@ -43,7 +45,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	}
 
 	/**
-	 * @throws \JsonException
+	 * @throws JsonException
 	 */
 	public function run(): bool {
 		$this->extensionConfig = MediaWikiServices::getInstance()
@@ -74,7 +76,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled, JSON_THROW_ON_ERROR ) ) );
 
-		/** @var \MWHttpRequest[] $requests */
+		/** @var MWHttpRequest[] $requests */
 		$requests = [];
 
 		foreach ( $enabled as $service ) {

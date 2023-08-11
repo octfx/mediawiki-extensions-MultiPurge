@@ -7,6 +7,7 @@ namespace MediaWiki\Extension\MultiPurge\Hooks;
 use Article;
 use Config;
 use EditPage;
+use Exception;
 use File;
 use HtmlCacheUpdater;
 use JobQueueGroup;
@@ -201,7 +202,11 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 		if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
 			$this->group->lazyPush( $job );
 		} else {
-			$status = $job->run();
+			try {
+				$status = $job->run();
+			} catch ( Exception $e ) {
+				$status = false;
+			}
 			wfDebugLog(
 				'MultiPurge',
 				sprintf(

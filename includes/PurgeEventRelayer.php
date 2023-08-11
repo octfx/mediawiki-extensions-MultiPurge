@@ -5,6 +5,7 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge;
 
 use EventRelayer;
+use Exception;
 use MediaWiki\MediaWikiServices;
 
 class PurgeEventRelayer extends EventRelayer {
@@ -38,7 +39,11 @@ class PurgeEventRelayer extends EventRelayer {
 		if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
 			MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
 		} else {
-			$status = $job->run();
+			try {
+				$status = $job->run();
+			} catch ( Exception $e ) {
+				$status = false;
+			}
 			wfDebugLog(
 				'MultiPurge',
 				sprintf(
