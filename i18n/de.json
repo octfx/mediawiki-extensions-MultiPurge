@@ -1,0 +1,21 @@
+{
+	"@metadata": {
+		"authors": []
+	},
+	"multipurge-desc": "Bereinige mehrere Dienste wie Cloudflare und Varnish bei Seitenänderungen.",
+	"multipurge-form-title": "Ressourcen in konfigurierten Caches bereinigen",
+	"multipurge-title-input": "Titel zum Bereinigen",
+	"multipurge-special-purge-success": "URLs erfolgreich bereinigt",
+	"multipurge-special-purge-error": "Fehler beim Bereinigen von URLs",
+	"multipurge-special-no-urls": "Keine Urls ausgewählt",
+	"multipurge-styles-label": "Styles zum Bereinigen auswählen",
+	"multipurge-scripts-label": "Skripte zum Bereinigen auswählen",
+	"multipurge-thumbs-label": "Zu bereinigende Dateien auswählen",
+	"multipurge-static-label": "Konfigurierte Assets zum Bereinigen auswählen",
+	"purge-resources-form-title": "Asset-Quellseite",
+	"purge-resources-form-loads": "Bereinigbare Assets",
+	"multipurge-special-purge-submit": "Ausgewählte Ressourcen bereinigen",
+	"multipurge-special-load-submit": "Ressourcen laden",
+	"multipurge-special-invalid-title": "Titel existiert nicht",
+	"purgeresources": "Ressourcen mit einem bestimmten Titel bereinigen"
+}
