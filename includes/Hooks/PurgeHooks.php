@@ -7,6 +7,7 @@ namespace MediaWiki\Extension\MultiPurge\Hooks;
 use Article;
 use Config;
 use EditPage;
+use Exception;
 use File;
 use HtmlCacheUpdater;
 use JobQueueGroup;
