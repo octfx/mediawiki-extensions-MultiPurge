@@ -5,17 +5,14 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
-use MediaWiki\Http\HttpRequestFactory;
 use MediaWiki\MediaWikiServices;
 use RuntimeException;
 
 class Varnish implements PurgeServiceInterface {
 	private $extensionConfig;
-	private $requestFactory;
 
-	public function __construct( Config $extensionConfig, HttpRequestFactory $requestFactory ) {
+	public function __construct( Config $extensionConfig ) {
 		$this->extensionConfig = $extensionConfig;
-		$this->requestFactory = $requestFactory;
 	}
 
 	public function setup(): void {
@@ -50,16 +47,18 @@ class Varnish implements PurgeServiceInterface {
 						// Based on https://varnish-cache.org/docs/4.0/users-guide/purging.html
 						$parsedUrl = $this->buildUrl( $parsedUrl );
 
-						$request = $this->requestFactory->create(
-							$parsedUrl,
-							[
-								'method' => 'PURGE',
-								'userAgent' => 'MediaWiki/ext-multipurge'
+						$requests[] = [
+							'method' => 'PURGE',
+							'url' => $parsedUrl,
+							'timeout' => 30,
+							'connectTimeout' => 30,
+							'headers' => [
+								'Host' => $host,
+								'Connection' => 'Keep-Alive',
+								'Proxy-Connection' => 'Keep-Alive',
+								'User-Agent' => 'MediaWiki/ext-multipurge-' . MW_VERSION . ' ' . __CLASS__,
 							]
-						);
-
-						$request->setHeader( 'Host', $host );
-						$requests[] = $request;
+						];
 						wfDebugLog(
 							'MultiPurge',
 							sprintf(

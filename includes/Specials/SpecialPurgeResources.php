@@ -5,12 +5,14 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Specials;
 
 use ConfigException;
+use Exception;
 use HTMLForm;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\MediaWikiServices;
 use OOUIHTMLForm;
 use PermissionsError;
 use SpecialPage;
+use Status;
 
 class SpecialPurgeResources extends SpecialPage {
 
@@ -125,15 +127,19 @@ class SpecialPurgeResources extends SpecialPage {
 				'urls' => $urls,
 			] );
 
-			if ( $job->run() ) {
-				# TODO How to return success?
-				return 'multipurge-special-purge-success';
+			try {
+				if ( $job->run() ) {
+					// new Message('multipurge-special-purge-success')
+					return Status::newGood();
+				}
+			} catch ( Exception $e ) {
+				// Fall through
 			}
 
-			return 'multipurge-special-purge-error';
+			return Status::newFatal( 'multipurge-special-purge-error' );
 		}
 
-		return 'multipurge-special-no-urls';
+		return Status::newFatal( 'multipurge-special-no-urls' );
 	}
 
 	/**
@@ -150,7 +156,7 @@ class SpecialPurgeResources extends SpecialPage {
 		$scriptCount = preg_match_all( '/src="(\/load.php\?.*)"><\/script>/U', $content, $scripts );
 
 		// Thumbs
-		$imageCount = preg_match_all( '/<img alt=".+" src="(.*)" decoding/U', $content, $images );
+		$imageCount = preg_match_all( '/<img alt=".+" src="(.*)"/U', $content, $images );
 
 		if ( $styleCount !== false && $styleCount > 0 ) {
 			array_shift( $styles );

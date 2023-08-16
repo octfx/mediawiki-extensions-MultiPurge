@@ -5,16 +5,20 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
 use Article;
+use Config;
 use EditPage;
 use File;
+use HtmlCacheUpdater;
+use JobQueueGroup;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
-use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use MediaWiki\ResourceLoader\Context;
 use MediaWiki\ResourceLoader\DerivativeContext;
+use MediaWiki\ResourceLoader\ResourceLoader;
+use MediaWiki\Utils\UrlUtils;
 use ReflectionException;
 use ReflectionObject;
 use RequestContext;
@@ -24,6 +28,20 @@ use WikiFilePage;
 use WikiPage;
 
 class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
+
+	private Config $config;
+	private HtmlCacheUpdater $cacheUpdater;
+	private JobQueueGroup $group;
+	private ResourceLoader $rl;
+	private UrlUtils $utils;
+
+	public function __construct( Config $config, HtmlCacheUpdater $cacheUpdater, JobQueueGroup $group, ResourceLoader $rl, UrlUtils $utils ) {
+		$this->config = $config;
+		$this->cacheUpdater = $cacheUpdater;
+		$this->group = $group;
+		$this->rl = $rl;
+		$this->utils = $utils;
+	}
 
 	/**
 	 * Retrieve a list of thumbnail URLs that needs to be purged
@@ -51,7 +69,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 		} elseif ( $wikiPage->getTitle() === null ) {
 			return;
 		} else {
-			$urls = MediaWikiServices::getInstance()->getHtmlCacheUpdater()->getUrls( $wikiPage->getTitle() );
+			$urls = $this->cacheUpdater->getUrls( $wikiPage->getTitle() );
 		}
 
 		$this->buildSiteModuleUrl( $wikiPage->getTitle(), $urls );
@@ -125,8 +143,8 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @return array
 	 */
 	private function linkThumbnails( array $files, File $baseFile ): array {
-		$url = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
-		$uploadPath = MediaWikiServices::getInstance()->getMainConfig()->get( 'UploadPath' );
+		$url = $this->config->get( 'Server' );
+		$uploadPath = $this->config->get( 'UploadPath' );
 		$parsed = parse_url( $uploadPath );
 
 		if ( $parsed !== false && isset( $parsed['host'] ) ) {
@@ -168,6 +186,8 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @param array $urls
 	 */
 	private function runPurge( array $urls ): void {
+		$urls = array_unique( $urls );
+
 		if ( empty( $urls ) ) {
 			return;
 		}
@@ -180,10 +200,14 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 				'service' => $service,
 			] );
 
-			if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
-				MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
+			if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
+				$this->group->lazyPush( $job );
 			} else {
-				$status = $job->run();
+				try {
+					$status = $job->run();
+				} catch ( Exception $e ) {
+					$status = false;
+				}
 				wfDebugLog(
 					'MultiPurge',
 					sprintf(
@@ -220,24 +244,21 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			return;
 		}
 
-		$config = MediaWikiServices::getInstance()->getMainConfig();
-
 		$request = RequestContext::getMain();
 
-		$rl = MediaWikiServices::getInstance()->getResourceLoader();
 		$rlContext = new Context(
-			$rl,
+			$this->rl,
 			$request->getRequest()
 		);
 
 		$derive = new DerivativeContext( $rlContext );
 		$derive->setModules( [ 'site.styles' ] );
-		$derive->setLanguage( $config->get( 'LanguageCode' ) );
+		$derive->setLanguage( $this->config->get( 'LanguageCode' ) );
 		$derive->setSkin( $request->getSkin()->getSkinName() );
 		$derive->setOnly( 'styles' );
 
-		$url = $rl->createLoaderURL( 'local', $derive );
+		$url = $this->rl->createLoaderURL( 'local', $derive );
 
-		$urls[] = MediaWikiServices::getInstance()->getUrlUtils()->expand( $url );
+		$urls[] = $this->utils->expand( $url );
 	}
 }

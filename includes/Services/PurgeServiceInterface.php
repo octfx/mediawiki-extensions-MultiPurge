@@ -5,17 +5,14 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
-use MediaWiki\Http\HttpRequestFactory;
-use MWHttpRequest;
 
 interface PurgeServiceInterface {
 	/**
 	 * The config object containing the extension specific settings
 	 *
 	 * @param Config $extensionConfig
-	 * @param HttpRequestFactory $requestFactory
 	 */
-	public function __construct( Config $extensionConfig, HttpRequestFactory $requestFactory );
+	public function __construct( Config $extensionConfig );
 
 	/**
 	 * This is called once by the factory after instantiating the purge service.
@@ -24,10 +21,10 @@ interface PurgeServiceInterface {
 	public function setup(): void;
 
 	/**
-	 * Returns one or multiple MWHttpRequests used to execute the actual purge request
+	 * Returns one or multiple config array used to execute the actual purge request using MultiClient
 	 *
 	 * @param string|array $urls
-	 * @return MWHttpRequest[]
+	 * @return array
 	 */
 	public function getPurgeRequest( $urls ): array;
 }

@@ -5,16 +5,14 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
-use MediaWiki\Http\HttpRequestFactory;
+use JsonException;
 use MWHttpRequest;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
-	private $requestFactory;
 
-	public function __construct( Config $extensionConfig, HttpRequestFactory $requestFactory ) {
+	public function __construct( Config $extensionConfig ) {
 		$this->extensionConfig = $extensionConfig;
-		$this->requestFactory = $requestFactory;
 	}
 
 	public function setup(): void {
@@ -49,7 +47,12 @@ class Cloudflare implements PurgeServiceInterface {
 		$requests = [];
 
 		foreach ( array_chunk( $urls, 30 ) as $chunk ) {
-			$requests = array_merge( $requests, $this->makeRequest( $chunk ) );
+			try {
+				$requests[] = $this->makeRequest( $chunk );
+			} catch ( JsonException $e ) {
+				// Shouldn't really happen
+				continue;
+			}
 		}
 
 		return $requests;
@@ -60,25 +63,29 @@ class Cloudflare implements PurgeServiceInterface {
 	 *
 	 * @param array $urls
 	 * @return MWHttpRequest[]
+	 * @throws JsonException
 	 */
 	private function makeRequest( array $urls ): array {
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
-
-		$request = $this->requestFactory->create(
-			"https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
-			[
-				'method' => 'POST',
-				'userAgent' => 'MediaWiki/ext-multipurge',
-				'postData' => json_encode( [ 'files' => $urls ] ),
-			]
+		wfDebugLog(
+			'MultiPurge',
+			sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls, JSON_THROW_ON_ERROR ) )
 		);
 
-		$request->setHeader( 'Authorization', sprintf( 'Bearer %s', $apiToken ) );
-		$request->setHeader( 'Content-Type', 'application/json' );
-
-		wfDebugLog( 'MultiPurge', sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls ) ) );
-
-		return [ $request ];
+		return [
+			'method' => 'POST',
+			'url' => "https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
+			'headers' => [
+				'Connection' => 'Keep-Alive',
+				'Proxy-Connection' => 'Keep-Alive',
+				'User-Agent' => 'MediaWiki/ext-multipurge-' . MW_VERSION . ' ' . __CLASS__,
+				'Authorization' => sprintf( 'Bearer %s', $apiToken ),
+				'Content-Type' => 'application/json',
+			],
+			'postData' => json_encode( [ 'files' => $urls ], JSON_THROW_ON_ERROR ),
+			// Body in case of curl
+			'body' => json_encode( [ 'files' => $urls ], JSON_THROW_ON_ERROR ),
+		];
 	}
 }
