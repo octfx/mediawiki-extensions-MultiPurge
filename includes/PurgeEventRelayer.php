@@ -32,25 +32,28 @@ class PurgeEventRelayer extends EventRelayer {
 
 		wfDebugLog( 'MultiPurge', 'Running Job' );
 
-		$job = new MultiPurgeJob( [
-			'urls' => array_unique( $urls ),
-		] );
+		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
+			$job = new MultiPurgeJob( [
+				'urls' => array_unique( $urls ),
+				'service' => $service,
+			] );
 
-		if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
-			MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
-		} else {
-			try {
-				$status = $job->run();
-			} catch ( Exception $e ) {
-				$status = false;
+			if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
+				MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
+			} else {
+				try {
+					$status = $job->run();
+				} catch ( Exception $e ) {
+					$status = false;
+				}
+				wfDebugLog(
+					'MultiPurge',
+					sprintf(
+						'Job Status: %s',
+						( $status === true ? 'success' : 'error' )
+					)
+				);
 			}
-			wfDebugLog(
-				'MultiPurge',
-				sprintf(
-					'Job Status: %s',
-					( $status === true ? 'success' : 'error' )
-				)
-			);
 		}
 	}
 }

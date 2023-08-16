@@ -7,7 +7,6 @@ namespace MediaWiki\Extension\MultiPurge\Hooks;
 use Article;
 use Config;
 use EditPage;
-use Exception;
 use File;
 use HtmlCacheUpdater;
 use JobQueueGroup;
@@ -195,25 +194,28 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 
 		wfDebugLog( 'MultiPurge', 'Running Job from PurgeHooks' );
 
-		$job = new MultiPurgeJob( [
-			'urls' => $urls,
-		] );
+		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
+			$job = new MultiPurgeJob( [
+				'urls' => array_unique( $urls ),
+				'service' => $service,
+			] );
 
-		if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
-			$this->group->lazyPush( $job );
-		} else {
-			try {
-				$status = $job->run();
-			} catch ( Exception $e ) {
-				$status = false;
+			if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
+				$this->group->lazyPush( $job );
+			} else {
+				try {
+					$status = $job->run();
+				} catch ( Exception $e ) {
+					$status = false;
+				}
+				wfDebugLog(
+					'MultiPurge',
+					sprintf(
+						'Job Status: %s',
+						( $status === true ? 'success' : 'error' )
+					)
+				);
 			}
-			wfDebugLog(
-				'MultiPurge',
-				sprintf(
-					'Job Status: %s',
-					( $status === true ? 'success' : 'error' )
-				)
-			);
 		}
 	}
 
