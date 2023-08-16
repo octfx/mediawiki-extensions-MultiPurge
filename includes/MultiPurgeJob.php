@@ -5,6 +5,7 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge;
 
 use Config;
+use Exception;
 use GenericParameterJob;
 use InvalidArgumentException;
 use Job;
@@ -36,6 +37,40 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		Varnish::class,
 	];
 
+	/**
+	 * Returns all enabled services in order as an array
+	 *
+	 * @return PurgeServiceInterface[]
+	 */
+	public static function getServiceOrder(): array {
+		$extensionConfig = MediaWikiServices::getInstance()
+			->getConfigFactory()
+			->makeConfig( 'MultiPurge' );
+
+		$services = $extensionConfig->get( 'MultiPurgeEnabledServices' );
+		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services: %s', json_encode( $services ) ) );
+
+		if ( empty( $services ) ) {
+			wfDebugLog( 'MultiPurge', 'Services empty' );
+			return [];
+		}
+
+		$services = array_map( [ __CLASS__, 'normalizeServiceName' ], $services );
+
+		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' );
+
+		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
+		if ( !empty( $serviceOrder ) ) {
+			$serviceOrder = array_map( [ __CLASS__, 'normalizeServiceName' ], $serviceOrder );
+		}
+
+		$enabled = array_intersect( $serviceOrder, $services );
+
+		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled ) ) );
+
+		return $enabled;
+	}
+
 	public function __construct( array $params ) {
 		parent::__construct( 'MultiPurgePages', $params );
 		$this->removeDuplicates = true;
@@ -45,35 +80,27 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			->makeConfig( 'MultiPurge' );
 	}
 
+	/**
+	 * Run the purge job
+	 * If no service is explicitly set, the purge is run against all enabled services
+	 *
+	 * @return bool
+	 */
 	public function run(): bool {
-		$purgeConfig = MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' );
-
-		$services = $purgeConfig->get( 'MultiPurgeEnabledServices' );
-		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services: %s', json_encode( $services ) ) );
-
-		if ( empty( $services ) ) {
-			wfDebugLog( 'MultiPurge', 'Services empty' );
-			return true;
+		if ( !isset( $this->params['service'] ) ) {
+			$enabled = self::getServiceOrder();
+		} else {
+			$enabled = [ $this->params['service'] ];
 		}
-
-		$services = array_map( [ $this, 'normalizeServiceName' ], $services );
-
-		$serviceOrder = $purgeConfig->get( 'MultiPurgeServiceOrder' );
-
-		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
-		if ( !empty( $serviceOrder ) ) {
-			$serviceOrder = array_map( [ $this, 'normalizeServiceName' ], $serviceOrder );
-		}
-
-		$enabled = array_intersect( $serviceOrder, $services );
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled ) ) );
 
-		/** @var \MWHttpRequest[] $requests */
+		$http = MediaWikiServices::getInstance()->getHttpRequestFactory()
+			->createMultiClient( [ 'maxConnsPerHost' => 8, 'usePipelining' => true ] );
+
 		$requests = [];
 
 		foreach ( $enabled as $service ) {
-			wfDebugLog( 'MultiPurge', $service );
 			$urls = $this->params['urls'];
 
 			$run = MediaWikiServices::getInstance()->getHookContainer()->run(
@@ -91,7 +118,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			try {
 				$urls = $this->getPurgeService( $service )->getPurgeRequest( $urls );
 
-				$requests = array_merge( $requests, $urls );
+				$requests = [ ...$requests, ...$urls ];
 			} catch ( ReflectionException $e ) {
 				wfDebugLog( 'MultiPurge', $e->getMessage() );
 				wfLogWarning( sprintf( '[MultiPurge] Could not instantiate service "%s"', $service ) );
@@ -100,25 +127,41 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Calling %d purge urls', count( $requests ) ) );
 
-		$statuses = [];
-		foreach ( $requests as $request ) {
-			wfDebugLog( 'MultiPurge', sprintf( 'Executing: %s', $request->getFinalUrl() ) );
-
-			$statuses[] = [
-				$request->getFinalUrl(),
-				$request->execute()
-			];
+		try {
+			$statuses = $http->runMulti( $requests );
+		} catch ( Exception $e ) {
+			wfLogWarning( sprintf( '[MultiPurge]: %s', $e->getMessage() ) );
+			return false;
 		}
 
 		return array_reduce( $statuses, static function ( bool $carry, array $data ) {
-			if ( !$data[1]->isGood() ) {
-				$status = $data[1]->getMessage()->plain();
-				wfLogWarning( $status );
-				wfDebugLog( 'MultiPurge', sprintf( 'Result for request %s: %s', $data[0], $status ) );
+			[ $code, $reason, $headers, $body, $error ] = $data['response'];
+			$good = false;
+			if ( $code >= 200 && $code <= 299 ) {
+				$good = true;
+			} else {
+				$status = $body ?? $error;
+				wfDebugLog( 'MultiPurge', sprintf( 'Result for request %s is: %s', $data['url'], $status ) );
 			}
 
-			return $carry && $data[1]->isGood();
+			return $carry && $good;
 		}, true );
+	}
+
+	/**
+	 * Delays CloudFlare purge jobs in order to mitigate hitting the rate limit
+	 *
+	 * @return float|int|null
+	 */
+	public function getReleaseTimestamp() {
+		if ( isset( $this->params['service'] ) && self::normalizeServiceName( $this->params['service'] ) === Cloudflare::class ) {
+			// Delay cloudflare jobs to not hit the 1000 urls/min purge limit
+			$delay = (int)( count( $this->params['urls'] ) / 500 ) * 60;
+
+			return time() + $delay;
+		}
+
+		return parent::getReleaseTimestamp();
 	}
 
 	/**
@@ -127,18 +170,13 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	 * @param string $name
 	 * @return string
 	 */
-	private function normalizeServiceName( string $name ): string {
+	private static function normalizeServiceName( string $name ): string {
 		$original = $name;
-		switch ( strtolower( $name ) ) {
-			case 'cloudflare':
-				return Cloudflare::class;
-
-			case 'varnish':
-				return Varnish::class;
-
-			default:
-				return $original;
-		}
+		return match ( strtolower( $name ) ) {
+			Cloudflare::class, 'cloudflare' => Cloudflare::class,
+			Varnish::class, 'varnish' => Varnish::class,
+			default => $original,
+		};
 	}
 
 	/**
@@ -150,7 +188,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	 * @throws ReflectionException
 	 */
 	private function getPurgeService( string $class ): PurgeServiceInterface {
-		$class = $this->normalizeServiceName( $class );
+		$class = self::normalizeServiceName( $class );
 
 		if ( !in_array( $class, $this->availableServices ) ) {
 			throw new InvalidArgumentException( sprintf( 'Service "%s" not recognized.', $class ) );
