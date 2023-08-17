@@ -6,7 +6,6 @@ namespace MediaWiki\Extension\MultiPurge\Services;
 
 use Config;
 use JsonException;
-use MWHttpRequest;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
@@ -24,7 +23,7 @@ class Cloudflare implements PurgeServiceInterface {
 	 * Chunks the request of count($urls) > 30
 	 *
 	 * @param $urls
-	 * @return MWHttpRequest[]
+	 * @return array
 	 */
 	public function getPurgeRequest( $urls ): array {
 		if ( !is_array( $urls ) ) {
@@ -62,7 +61,7 @@ class Cloudflare implements PurgeServiceInterface {
 	 * Create the actual request for the given urls
 	 *
 	 * @param array $urls
-	 * @return MWHttpRequest[]
+	 * @return array
 	 * @throws JsonException
 	 */
 	private function makeRequest( array $urls ): array {

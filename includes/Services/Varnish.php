@@ -28,6 +28,10 @@ class Varnish implements PurgeServiceInterface {
 			$urls = [ $urls ];
 		}
 
+		if ( !is_array( $varnishServers ) ) {
+			$varnishServers = [ $varnishServers ];
+		}
+
 		$requests = [];
 
 		foreach ( $urls as $url ) {
