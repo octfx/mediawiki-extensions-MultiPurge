@@ -28,6 +28,9 @@ use Title;
 use WikiFilePage;
 use WikiPage;
 
+/**
+ * phpcs:disable MediaWiki.NamingConventions.LowerCamelFunctionsName.FunctionName
+ */
 class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 	private Config $config;
@@ -36,7 +39,20 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	private ResourceLoader $rl;
 	private UrlUtils $utils;
 
-	public function __construct( Config $config, HtmlCacheUpdater $cacheUpdater, JobQueueGroup $group, ResourceLoader $rl, UrlUtils $utils ) {
+	/**
+	 * @param Config $config
+	 * @param HtmlCacheUpdater $cacheUpdater
+	 * @param JobQueueGroup $group
+	 * @param ResourceLoader $rl
+	 * @param UrlUtils $utils
+	 */
+	public function __construct(
+		Config $config,
+		HtmlCacheUpdater $cacheUpdater,
+		JobQueueGroup $group,
+		ResourceLoader $rl,
+		UrlUtils $utils
+	) {
 		$this->config = $config;
 		$this->cacheUpdater = $cacheUpdater;
 		$this->group = $group;
@@ -85,7 +101,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @see PurgeEventRelayer
 	 * @param EditPage $editpage_Obj
 	 * @param Status $status
-	 * @param $resultDetails
+	 * @param array $resultDetails
 	 * @return void
 	 */
 	public function onEditPage__attemptSave_after( $editpage_Obj, $status, $resultDetails ) {
@@ -229,7 +245,9 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			return $page->getNamespace() === NS_FILE;
 		}
 
-		return $page instanceof WikiFilePage && $page->getTitle() !== null && $page->getTitle()->getNamespace() === NS_FILE;
+		return $page instanceof WikiFilePage &&
+			$page->getTitle() !== null &&
+			$page->getTitle()->getNamespace() === NS_FILE;
 	}
 
 	/**
@@ -237,7 +255,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * Gets called after an edit to a MediaWiki:*.css page
 	 *
 	 * @param Title $title
-	 * @param array $urls
+	 * @param array &$urls
 	 * @return void
 	 */
 	private function buildSiteModuleUrl( Title $title, array &$urls ): void {

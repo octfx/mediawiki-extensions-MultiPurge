@@ -9,7 +9,11 @@ use Exception;
 use MediaWiki\MediaWikiServices;
 
 class PurgeEventRelayer extends EventRelayer {
-
+	/**
+	 * @param string $channel
+	 * @param array $events
+	 * @return void
+	 */
 	protected function doNotify( $channel, array $events ) {
 		if ( $channel !== 'cdn-url-purges' ) {
 			return;
@@ -38,7 +42,7 @@ class PurgeEventRelayer extends EventRelayer {
 				'service' => $service,
 			] );
 
-			if ( MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeRunInQueue' ) === true ) {
+			if ( MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeRunInQueue' ) === true ) {
 				MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
 			} else {
 				try {

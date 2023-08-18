@@ -10,10 +10,16 @@ use JsonException;
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
 
+	/**
+	 * @param Config $extensionConfig
+	 */
 	public function __construct( Config $extensionConfig ) {
 		$this->extensionConfig = $extensionConfig;
 	}
 
+	/**
+	 * @return void
+	 */
 	public function setup(): void {
 		wfDebugLog( 'MultiPurge', 'Setup Cloudflare' );
 	}
@@ -22,7 +28,7 @@ class Cloudflare implements PurgeServiceInterface {
 	 * Returns as array of purge requests
 	 * Chunks the request of count($urls) > 30
 	 *
-	 * @param $urls
+	 * @param string|array $urls
 	 * @return array
 	 */
 	public function getPurgeRequest( $urls ): array {
@@ -69,7 +75,11 @@ class Cloudflare implements PurgeServiceInterface {
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
 		wfDebugLog(
 			'MultiPurge',
-			sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls, JSON_THROW_ON_ERROR ) )
+			sprintf(
+				'Added %d files to Cloudflare request: %s',
+				count( $urls ),
+				json_encode( $urls, JSON_THROW_ON_ERROR )
+			)
 		);
 
 		return [

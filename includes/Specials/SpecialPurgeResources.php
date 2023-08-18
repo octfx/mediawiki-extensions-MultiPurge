@@ -9,13 +9,16 @@ use Exception;
 use HTMLForm;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\MediaWikiServices;
+use Message;
 use OOUIHTMLForm;
 use PermissionsError;
 use SpecialPage;
 use Status;
 
 class SpecialPurgeResources extends SpecialPage {
-
+	/**
+	 *
+	 */
 	public function __construct() {
 		parent::__construct( 'PurgeResources', 'editinterface' );
 	}
@@ -23,6 +26,7 @@ class SpecialPurgeResources extends SpecialPage {
 	/**
 	 * Show the page to the user
 	 *
+	 * @param string $sub
 	 * @throws PermissionsError
 	 */
 	public function execute( $sub ) {
@@ -49,16 +53,16 @@ class SpecialPurgeResources extends SpecialPage {
 				$formDescriptor = array_merge( $formDescriptor, $this->makeSelects( $this->parseLoads( $content ) ) );
 				$showPurge = true;
 			} else {
-				$out->prependHTML( wfMessage( 'multipurge-special-invalid-title' )->plain() );
+				$out->prependHTML( $this->msg( 'multipurge-special-invalid-title' )->plain() );
 			}
 		}
 
 		$htmlForm = HTMLForm::factory( 'ooui', $formDescriptor, $this->getContext(), 'purge-resources-form' );
 
 		if ( $showPurge ) {
-			$htmlForm->setSubmitText( wfMessage( 'multipurge-special-purge-submit' )->plain() );
+			$htmlForm->setSubmitText( $this->msg( 'multipurge-special-purge-submit' )->plain() );
 		} else {
-			$htmlForm->setSubmitText( wfMessage( 'multipurge-special-load-submit' )->plain() );
+			$htmlForm->setSubmitText( $this->msg( 'multipurge-special-load-submit' )->plain() );
 		}
 
 		$htmlForm->setSubmitCallback( [ __CLASS__, 'trySubmit' ] );
@@ -120,7 +124,10 @@ class SpecialPurgeResources extends SpecialPage {
 			array_map( $mapper, $formData['statics'] ?? [] ),
 		) ) );
 
-		wfDebugLog( 'MultiPurge', sprintf( 'Purging urls from Special Page: %s', json_encode( $urls ) ) );
+		wfDebugLog(
+			'MultiPurge',
+			sprintf( 'Purging urls from Special Page: %s', json_encode( $urls ) )
+		);
 
 		if ( !empty( $urls ) ) {
 			$job = new MultiPurgeJob( [
@@ -129,8 +136,8 @@ class SpecialPurgeResources extends SpecialPage {
 
 			try {
 				if ( $job->run() ) {
-					// new Message('multipurge-special-purge-success')
-					return Status::newGood();
+					return new Message( 'multipurge-special-purge-success' );
+					// return Status::newGood();
 				}
 			} catch ( Exception $e ) {
 				// Fall through
@@ -206,7 +213,7 @@ class SpecialPurgeResources extends SpecialPage {
 	 */
 	private function makeSelects( array $loads ): array {
 		try {
-			$statics = MediaWikiServices::getInstance()->getConfigFactory()->makeConfig( 'MultiPurge' )->get( 'MultiPurgeStaticPurges' );
+			$statics = MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeStaticPurges' );
 		} catch ( ConfigException $e ) {
 			$statics = [];
 		}
@@ -243,6 +250,9 @@ class SpecialPurgeResources extends SpecialPage {
 		return $selects;
 	}
 
+	/**
+	 * @return string
+	 */
 	protected function getGroupName() {
 		return 'other';
 	}
