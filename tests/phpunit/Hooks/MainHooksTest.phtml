@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MediaWiki\Extension\MultiPurge\Tests\Hooks;
+
+use MediaWiki\Extension\MultiPurge\Hooks\MainHooks;
+use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
+use MediaWikiIntegrationTestCase;
+
+/**
+ * @group MultiPurge
+ */
+class MainHooksTest extends MediaWikiIntegrationTestCase
+{
+    /**
+     * @covers \MediaWiki\Extension\MultiPurge\Hooks\MainHooks::setup
+     * @return void
+     */
+    public function testSetup() {
+        global $wgEventRelayerConfig;
+
+        MainHooks::setup();
+
+        $this->assertEquals(['class' => PurgeEventRelayer::class], $wgEventRelayerConfig['cdn-url-purges']);
+    }
+}

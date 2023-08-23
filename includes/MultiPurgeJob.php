@@ -57,7 +57,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		$services = array_map( [ __CLASS__, 'normalizeServiceName' ], $services );
 
-		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' );
+		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' ) ?? $services;
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
 		if ( !empty( $serviceOrder ) ) {
@@ -146,7 +146,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 				$status = $body ?? $error;
 				wfDebugLog(
 					'MultiPurge',
-					sprintf( 'Result for request %s is: %s', $data['url'], $status )
+					sprintf( 'Result for request %s is: %s', $data['url'] ?? '<invalid>', $status )
 				);
 			}
 
@@ -165,9 +165,9 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			self::normalizeServiceName( $this->params['service'] ) === Cloudflare::class
 		) {
 			// Delay cloudflare jobs to not hit the 1000 urls/min purge limit
-			$delay = (int)( count( $this->params['urls'] ) / 500 ) * 60;
+			$delay = (int)( ( count( $this->params['urls'] ) / 500 ) * 60 );
 
-			return time() + $delay;
+			return parent::getReleaseTimestamp() + $delay;
 		}
 
 		return parent::getReleaseTimestamp();

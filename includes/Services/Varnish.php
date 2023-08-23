@@ -33,6 +33,10 @@ class Varnish implements PurgeServiceInterface {
 		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
 		$host = parse_url( $server )['host'];
 
+		if ( empty( $varnishServers ) ) {
+			return [];
+		}
+
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
 		}

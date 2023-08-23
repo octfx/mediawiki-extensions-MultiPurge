@@ -28,8 +28,8 @@ class VarnishTest extends \MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::getPurgeRequest
-	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::makeRequest
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Varnish::getPurgeRequest
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Varnish::buildUrl
 	 * @return void
 	 * @throws Exception
 	 */
@@ -43,8 +43,8 @@ class VarnishTest extends \MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::getPurgeRequest
-	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::makeRequest
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Varnish::getPurgeRequest
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Varnish::buildUrl
 	 * @return void
 	 * @throws Exception
 	 */

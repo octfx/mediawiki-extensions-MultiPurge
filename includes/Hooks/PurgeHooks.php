@@ -255,7 +255,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * Gets called after an edit to a MediaWiki:*.css page
 	 *
 	 * @param Title $title
-	 * @param array &$urls
+	 * @param array $urls
 	 * @return void
 	 */
 	private function buildSiteModuleUrl( Title $title, array &$urls ): void {
