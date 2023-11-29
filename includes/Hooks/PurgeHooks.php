@@ -8,6 +8,7 @@ use Article;
 use Config;
 use EditPage;
 use Exception;
+use ExtensionRegistry;
 use File;
 use HtmlCacheUpdater;
 use JobQueueGroup;
@@ -15,6 +16,7 @@ use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use MediaWiki\ResourceLoader\Context;
 use MediaWiki\ResourceLoader\DerivativeContext;
@@ -70,6 +72,44 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @param string[] $urls Array of URLs to purge from the caches, to be manipulated
 	 */
 	public function onLocalFilePurgeThumbnails( $file, $archiveName, $urls ): void {
+		$transformerUrls = [];
+
+		if ( ExtensionRegistry::getInstance()->isLoaded( 'WebP' ) ) {
+			$config = MediaWikiServices::getInstance()->getMainConfig();
+			// All this should ideally be offloaded to Ext:WebP
+			$transformers = $config->get( 'EnabledTransformers' );
+
+			foreach ( $transformers as $transformer ) {
+				$dir = $transformer::getFileExtension();
+
+				foreach ( $urls as $url ) {
+					$url = $transformer::changeExtension( $url );
+					$pos = strpos( $url, 'thumb' ) + 5;
+					$url = substr_replace( $url, '/' . $dir, $pos, 0 );
+					$transformerUrls[] = $url;
+
+					if ( $config->get( 'ResponsiveImages' ) ) {
+						foreach ( [ 1.5, 2 ] as $resolution ) {
+
+							$match = preg_match( '/\/(\d+)px/', $url, $matches );
+							if ( $match !== 1 || !isset( $matches[1] ) ) {
+								continue;
+							}
+
+							$res = (int)$matches[1] * $resolution;
+							$suffix = 'px-';
+							$transformerUrls[] = str_replace(
+								$matches[1] . $suffix, (string)$res . $suffix,
+								$url
+							);
+						}
+					}
+				}
+			}
+		}
+
+		$urls = [ ...$urls,...$transformerUrls ];
+
 		$this->runPurge( $urls );
 	}
 
