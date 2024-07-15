@@ -51,7 +51,9 @@ class Cloudflare implements PurgeServiceInterface {
 
 		$requests = [];
 
-		foreach ( array_chunk( $urls, 30 ) as $chunk ) {
+		$chunkSize = $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ? 15 : 30;
+		
+		foreach ( array_chunk( $urls, $chunkSize ) as $chunk ) {
 			try {
 				$requests[] = $this->makeRequest( $chunk );
 			} catch ( JsonException $e ) {
@@ -82,6 +84,19 @@ class Cloudflare implements PurgeServiceInterface {
 			)
 		);
 
+		$postData = [ 'files' => $urls ];
+
+		if ( $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ) {
+			foreach ( $urls as $url ) {
+				$postData['files'][] = [
+					'url' => $url,
+					'headers' => [ 'CF-Device-Type' => 'mobile' ]
+				];
+			}
+		}
+
+		$postData = json_encode( $postData, JSON_THROW_ON_ERROR );
+
 		return [
 			'method' => 'POST',
 			'url' => "https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
@@ -92,9 +107,9 @@ class Cloudflare implements PurgeServiceInterface {
 				'Authorization' => sprintf( 'Bearer %s', $apiToken ),
 				'Content-Type' => 'application/json',
 			],
-			'postData' => json_encode( [ 'files' => $urls ], JSON_THROW_ON_ERROR ),
+			'postData' => $postData,
 			// Body in case of curl
-			'body' => json_encode( [ 'files' => $urls ], JSON_THROW_ON_ERROR ),
+			'body' => $postData,
 		];
 	}
 }

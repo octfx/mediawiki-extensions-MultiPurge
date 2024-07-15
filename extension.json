@@ -23,6 +23,10 @@
 			"description": "",
 			"value": null
 		},
+		"MultiPurgeCloudFlareCacheByDeviceType": {
+			"description": "Whether or not CloudFlare's cache by device type is enabled.",
+			"value": false
+		},
 		"MultiPurgeVarnishServers": {
 			"description": "",
 			"value": null
