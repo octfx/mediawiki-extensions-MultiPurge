@@ -21,6 +21,7 @@ use RepoGroup;
 
 /**
  * @group MultiPurge
+ * @group Database
  */
 class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 
