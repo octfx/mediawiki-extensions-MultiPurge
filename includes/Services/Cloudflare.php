@@ -4,8 +4,8 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Services;
 
-use Config;
 use JsonException;
+use MediaWiki\Config\Config;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;

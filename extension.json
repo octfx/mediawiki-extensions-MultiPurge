@@ -52,7 +52,7 @@
 		}
 	},
 	"ConfigRegistry": {
-		"MultiPurge": "GlobalVarConfig::newInstance"
+		"MultiPurge": "MediaWiki\\Config\\GlobalVarConfig::newInstance"
 	},
 	"MessagesDirs": {
 		"MultiPurge": [

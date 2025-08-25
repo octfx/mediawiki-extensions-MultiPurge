@@ -5,19 +5,19 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Tests\Hooks;
 
 use Exception;
-use HtmlCacheUpdater;
 use JobQueueGroup;
 use LocalFile;
+use MediaWiki\Cache\HtmlCacheUpdater;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\ResourceLoader\ResourceLoader;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
 use MediaWiki\Utils\UrlUtils;
 use MediaWikiIntegrationTestCase;
 use MockHttpTrait;
 use RepoGroup;
-use Status;
 
 /**
  * @group MultiPurge
