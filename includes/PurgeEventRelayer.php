@@ -4,9 +4,9 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge;
 
-use EventRelayer;
 use Exception;
 use MediaWiki\MediaWikiServices;
+use Wikimedia\EventRelayer\EventRelayer;
 
 class PurgeEventRelayer extends EventRelayer {
 	/**

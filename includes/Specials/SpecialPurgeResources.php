@@ -4,16 +4,16 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Specials;
 
-use ConfigException;
 use Exception;
-use HTMLForm;
+use MediaWiki\Config\ConfigException;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
+use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\MediaWikiServices;
-use Message;
+use MediaWiki\Message\Message;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\Status\Status;
 use OOUIHTMLForm;
 use PermissionsError;
-use SpecialPage;
-use Status;
 
 class SpecialPurgeResources extends SpecialPage {
 	/**

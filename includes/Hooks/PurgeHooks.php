@@ -5,15 +5,15 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
 use Article;
-use Config;
-use EditPage;
 use Exception;
 use ExtensionRegistry;
 use File;
-use HtmlCacheUpdater;
 use JobQueueGroup;
+use MediaWiki\Cache\HtmlCacheUpdater;
+use MediaWiki\Config\Config;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
-use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
 use MediaWiki\MediaWikiServices;
@@ -21,12 +21,11 @@ use MediaWiki\Page\Hook\ArticlePurgeHook;
 use MediaWiki\ResourceLoader\Context;
 use MediaWiki\ResourceLoader\DerivativeContext;
 use MediaWiki\ResourceLoader\ResourceLoader;
+use MediaWiki\Status\Status;
+use MediaWiki\Title\Title;
 use MediaWiki\Utils\UrlUtils;
 use ReflectionException;
 use ReflectionObject;
-use RequestContext;
-use Status;
-use Title;
 use WikiFilePage;
 use WikiPage;
 
@@ -295,7 +294,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * Gets called after an edit to a MediaWiki:*.css page
 	 *
 	 * @param Title $title
-	 * @param array $urls
+	 * @param array &$urls
 	 * @return void
 	 */
 	private function buildSiteModuleUrl( Title $title, array &$urls ): void {

@@ -9,7 +9,7 @@ use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
 use MediaWiki\Http\HttpRequestFactory;
 use MediaWikiIntegrationTestCase;
-use MultiHttpClient;
+use Wikimedia\Http\MultiHttpClient;
 
 /**
  * @group MultiPurge

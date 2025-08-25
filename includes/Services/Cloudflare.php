@@ -4,8 +4,8 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Services;
 
-use Config;
 use JsonException;
+use MediaWiki\Config\Config;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
@@ -52,7 +52,7 @@ class Cloudflare implements PurgeServiceInterface {
 		$requests = [];
 
 		$chunkSize = $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ? 15 : 30;
-		
+
 		foreach ( array_chunk( $urls, $chunkSize ) as $chunk ) {
 			try {
 				$requests[] = $this->makeRequest( $chunk );

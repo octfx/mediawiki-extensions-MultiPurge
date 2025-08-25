@@ -4,7 +4,7 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Services;
 
-use Config;
+use MediaWiki\Config\Config;
 
 interface PurgeServiceInterface {
 	/**
