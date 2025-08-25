@@ -4,28 +4,45 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Services;
 
-use Config;
+use MediaWiki\Config\Config;
 use MediaWiki\MediaWikiServices;
 use RuntimeException;
 
 class Varnish implements PurgeServiceInterface {
 	private $extensionConfig;
 
+	/**
+	 * @param Config $extensionConfig
+	 */
 	public function __construct( Config $extensionConfig ) {
 		$this->extensionConfig = $extensionConfig;
 	}
 
+	/**
+	 * @return void
+	 */
 	public function setup(): void {
 		wfDebugLog( 'MultiPurge', 'Setup Varnish' );
 	}
 
+	/**
+	 * @inheritDoc
+	 */
 	public function getPurgeRequest( $urls ): array {
 		$varnishServers = $this->extensionConfig->get( 'MultiPurgeVarnishServers' );
 		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
 		$host = parse_url( $server )['host'];
 
+		if ( empty( $varnishServers ) ) {
+			return [];
+		}
+
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
+		}
+
+		if ( !is_array( $varnishServers ) ) {
+			$varnishServers = [ $varnishServers ];
 		}
 
 		$requests = [];
@@ -89,7 +106,7 @@ class Varnish implements PurgeServiceInterface {
 	private function buildUrl( array $components ): string {
 		$url = $components['scheme'] . '://';
 
-		if ( isset( $components['username'], $components['password'] ) ) {
+		if ( isset( $components['username'] ) && isset( $components['password'] ) ) {
 			$url .= $components['username'] . ':' . $components['password'] . '@';
 		}
 

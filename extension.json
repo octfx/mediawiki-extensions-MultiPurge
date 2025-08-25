@@ -1,6 +1,6 @@
 {
 	"name": "MultiPurge",
-	"version": "1.2.1",
+	"version": "2.0.0",
 	"author": [
 		"[https://www.mediawiki.org/wiki/User:Octfx Octfx]"
 	],
@@ -9,7 +9,7 @@
 	"license-name": "GPL-2.0-or-later",
 	"type": "parserhook",
 	"requires": {
-		"MediaWiki": ">= 1.39.0",
+		"MediaWiki": ">= 1.43.0",
 		"platform": {
 			"php": ">=8.0"
 		}
@@ -22,6 +22,10 @@
 		"MultiPurgeCloudFlareApiToken": {
 			"description": "",
 			"value": null
+		},
+		"MultiPurgeCloudFlareCacheByDeviceType": {
+			"description": "Whether or not CloudFlare's cache by device type is enabled.",
+			"value": false
 		},
 		"MultiPurgeVarnishServers": {
 			"description": "",
@@ -48,7 +52,7 @@
 		}
 	},
 	"ConfigRegistry": {
-		"MultiPurge": "GlobalVarConfig::newInstance"
+		"MultiPurge": "MediaWiki\\Config\\GlobalVarConfig::newInstance"
 	},
 	"MessagesDirs": {
 		"MultiPurge": [

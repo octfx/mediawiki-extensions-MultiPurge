@@ -4,11 +4,11 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge;
 
-use Config;
 use Exception;
 use GenericParameterJob;
 use InvalidArgumentException;
 use Job;
+use MediaWiki\Config\Config;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\PurgeServiceInterface;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
@@ -57,7 +57,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		$services = array_map( [ __CLASS__, 'normalizeServiceName' ], $services );
 
-		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' );
+		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' ) ?? $services;
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
 		if ( !empty( $serviceOrder ) ) {
@@ -71,6 +71,9 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		return $enabled;
 	}
 
+	/**
+	 * @param array $params
+	 */
 	public function __construct( array $params ) {
 		parent::__construct( 'MultiPurgePages', $params );
 		$this->removeDuplicates = true;
@@ -141,7 +144,10 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 				$good = true;
 			} else {
 				$status = $body ?? $error;
-				wfDebugLog( 'MultiPurge', sprintf( 'Result for request %s is: %s', $data['url'], $status ) );
+				wfDebugLog(
+					'MultiPurge',
+					sprintf( 'Result for request %s is: %s', $data['url'] ?? '<invalid>', $status )
+				);
 			}
 
 			return $carry && $good;
@@ -154,11 +160,14 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	 * @return float|int|null
 	 */
 	public function getReleaseTimestamp() {
-		if ( isset( $this->params['service'] ) && self::normalizeServiceName( $this->params['service'] ) === Cloudflare::class ) {
+		if (
+			isset( $this->params['service'] ) &&
+			self::normalizeServiceName( $this->params['service'] ) === Cloudflare::class
+		) {
 			// Delay cloudflare jobs to not hit the 1000 urls/min purge limit
-			$delay = (int)( count( $this->params['urls'] ) / 500 ) * 60;
+			$delay = (int)( ( count( $this->params['urls'] ) / 500 ) * 60 );
 
-			return time() + $delay;
+			return parent::getReleaseTimestamp() + $delay;
 		}
 
 		return parent::getReleaseTimestamp();
@@ -200,7 +209,10 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		$ref = new ReflectionClass( $class );
 		/** @var PurgeServiceInterface $instance */
-		$instance = $ref->newInstanceArgs( [ $this->extensionConfig, MediaWikiServices::getInstance()->getHttpRequestFactory() ] );
+		$instance = $ref->newInstanceArgs( [
+			$this->extensionConfig,
+			MediaWikiServices::getInstance()->getHttpRequestFactory()
+		] );
 		$instance->setup();
 
 		$this->serviceContainer[$class] = $instance;

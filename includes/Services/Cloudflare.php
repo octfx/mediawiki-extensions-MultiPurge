@@ -4,17 +4,22 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Services;
 
-use Config;
 use JsonException;
-use MWHttpRequest;
+use MediaWiki\Config\Config;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
 
+	/**
+	 * @param Config $extensionConfig
+	 */
 	public function __construct( Config $extensionConfig ) {
 		$this->extensionConfig = $extensionConfig;
 	}
 
+	/**
+	 * @return void
+	 */
 	public function setup(): void {
 		wfDebugLog( 'MultiPurge', 'Setup Cloudflare' );
 	}
@@ -23,8 +28,8 @@ class Cloudflare implements PurgeServiceInterface {
 	 * Returns as array of purge requests
 	 * Chunks the request of count($urls) > 30
 	 *
-	 * @param $urls
-	 * @return MWHttpRequest[]
+	 * @param string|array $urls
+	 * @return array
 	 */
 	public function getPurgeRequest( $urls ): array {
 		if ( !is_array( $urls ) ) {
@@ -46,7 +51,9 @@ class Cloudflare implements PurgeServiceInterface {
 
 		$requests = [];
 
-		foreach ( array_chunk( $urls, 30 ) as $chunk ) {
+		$chunkSize = $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ? 15 : 30;
+
+		foreach ( array_chunk( $urls, $chunkSize ) as $chunk ) {
 			try {
 				$requests[] = $this->makeRequest( $chunk );
 			} catch ( JsonException $e ) {
@@ -62,7 +69,7 @@ class Cloudflare implements PurgeServiceInterface {
 	 * Create the actual request for the given urls
 	 *
 	 * @param array $urls
-	 * @return MWHttpRequest[]
+	 * @return array
 	 * @throws JsonException
 	 */
 	private function makeRequest( array $urls ): array {
@@ -70,8 +77,25 @@ class Cloudflare implements PurgeServiceInterface {
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
 		wfDebugLog(
 			'MultiPurge',
-			sprintf( 'Added %d files to Cloudflare request: %s', count( $urls ), json_encode( $urls, JSON_THROW_ON_ERROR ) )
+			sprintf(
+				'Added %d files to Cloudflare request: %s',
+				count( $urls ),
+				json_encode( $urls, JSON_THROW_ON_ERROR )
+			)
 		);
+
+		$postData = [ 'files' => $urls ];
+
+		if ( $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ) {
+			foreach ( $urls as $url ) {
+				$postData['files'][] = [
+					'url' => $url,
+					'headers' => [ 'CF-Device-Type' => 'mobile' ]
+				];
+			}
+		}
+
+		$postData = json_encode( $postData, JSON_THROW_ON_ERROR );
 
 		return [
 			'method' => 'POST',
@@ -83,9 +107,9 @@ class Cloudflare implements PurgeServiceInterface {
 				'Authorization' => sprintf( 'Bearer %s', $apiToken ),
 				'Content-Type' => 'application/json',
 			],
-			'postData' => json_encode( [ 'files' => $urls ], JSON_THROW_ON_ERROR ),
+			'postData' => $postData,
 			// Body in case of curl
-			'body' => json_encode( [ 'files' => $urls ], JSON_THROW_ON_ERROR ),
+			'body' => $postData,
 		];
 	}
 }

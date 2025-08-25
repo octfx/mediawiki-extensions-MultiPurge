@@ -5,29 +5,33 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
 use Article;
-use Config;
-use EditPage;
 use Exception;
+use ExtensionRegistry;
 use File;
-use HtmlCacheUpdater;
 use JobQueueGroup;
+use MediaWiki\Cache\HtmlCacheUpdater;
+use MediaWiki\Config\Config;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
-use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use MediaWiki\ResourceLoader\Context;
 use MediaWiki\ResourceLoader\DerivativeContext;
 use MediaWiki\ResourceLoader\ResourceLoader;
+use MediaWiki\Status\Status;
+use MediaWiki\Title\Title;
 use MediaWiki\Utils\UrlUtils;
 use ReflectionException;
 use ReflectionObject;
-use RequestContext;
-use Status;
-use Title;
 use WikiFilePage;
 use WikiPage;
 
+/**
+ * phpcs:disable MediaWiki.NamingConventions.LowerCamelFunctionsName.FunctionName
+ */
 class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 	private Config $config;
@@ -36,7 +40,20 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	private ResourceLoader $rl;
 	private UrlUtils $utils;
 
-	public function __construct( Config $config, HtmlCacheUpdater $cacheUpdater, JobQueueGroup $group, ResourceLoader $rl, UrlUtils $utils ) {
+	/**
+	 * @param Config $config
+	 * @param HtmlCacheUpdater $cacheUpdater
+	 * @param JobQueueGroup $group
+	 * @param ResourceLoader $rl
+	 * @param UrlUtils $utils
+	 */
+	public function __construct(
+		Config $config,
+		HtmlCacheUpdater $cacheUpdater,
+		JobQueueGroup $group,
+		ResourceLoader $rl,
+		UrlUtils $utils
+	) {
 		$this->config = $config;
 		$this->cacheUpdater = $cacheUpdater;
 		$this->group = $group;
@@ -54,6 +71,44 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @param string[] $urls Array of URLs to purge from the caches, to be manipulated
 	 */
 	public function onLocalFilePurgeThumbnails( $file, $archiveName, $urls ): void {
+		$transformerUrls = [];
+
+		if ( ExtensionRegistry::getInstance()->isLoaded( 'WebP' ) ) {
+			$config = MediaWikiServices::getInstance()->getMainConfig();
+			// All this should ideally be offloaded to Ext:WebP
+			$transformers = $config->get( 'EnabledTransformers' );
+
+			foreach ( $transformers as $transformer ) {
+				$dir = $transformer::getFileExtension();
+
+				foreach ( $urls as $url ) {
+					$url = $transformer::changeExtension( $url );
+					$pos = strpos( $url, 'thumb' ) + 5;
+					$url = substr_replace( $url, '/' . $dir, $pos, 0 );
+					$transformerUrls[] = $url;
+
+					if ( $config->get( 'ResponsiveImages' ) ) {
+						foreach ( [ 1.5, 2 ] as $resolution ) {
+
+							$match = preg_match( '/\/(\d+)px/', $url, $matches );
+							if ( $match !== 1 || !isset( $matches[1] ) ) {
+								continue;
+							}
+
+							$res = (int)$matches[1] * $resolution;
+							$suffix = 'px-';
+							$transformerUrls[] = str_replace(
+								$matches[1] . $suffix, (string)$res . $suffix,
+								$url
+							);
+						}
+					}
+				}
+			}
+		}
+
+		$urls = [ ...$urls,...$transformerUrls ];
+
 		$this->runPurge( $urls );
 	}
 
@@ -85,7 +140,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @see PurgeEventRelayer
 	 * @param EditPage $editpage_Obj
 	 * @param Status $status
-	 * @param $resultDetails
+	 * @param array $resultDetails
 	 * @return void
 	 */
 	public function onEditPage__attemptSave_after( $editpage_Obj, $status, $resultDetails ) {
@@ -229,7 +284,9 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			return $page->getNamespace() === NS_FILE;
 		}
 
-		return $page instanceof WikiFilePage && $page->getTitle() !== null && $page->getTitle()->getNamespace() === NS_FILE;
+		return $page instanceof WikiFilePage &&
+			$page->getTitle() !== null &&
+			$page->getTitle()->getNamespace() === NS_FILE;
 	}
 
 	/**
@@ -237,7 +294,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * Gets called after an edit to a MediaWiki:*.css page
 	 *
 	 * @param Title $title
-	 * @param array $urls
+	 * @param array &$urls
 	 * @return void
 	 */
 	private function buildSiteModuleUrl( Title $title, array &$urls ): void {
