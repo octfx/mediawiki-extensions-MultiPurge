@@ -39,4 +39,14 @@ class SpecialPurgeResourcesTest extends SpecialPageTestBase {
 
 		$this->assertTrue( $page->userCanExecute( $this->getTestSysop()->getUser() ) );
 	}
+
+	/**
+	 * @covers \MediaWiki\Extension\MultiPurge\Specials\SpecialPurgeResources::execute
+	 * @return void
+	 */
+	public function testSetsPageTitle() {
+		[ $html ] = $this->executeSpecialPage( '', null, null, $this->getTestSysop()->getAuthority(), true );
+
+		$this->assertStringContainsString( '(multipurge-form-title)', $html );
+	}
 }

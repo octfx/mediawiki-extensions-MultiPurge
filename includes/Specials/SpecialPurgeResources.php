@@ -45,7 +45,7 @@ class SpecialPurgeResources extends SpecialPage {
 		$this->checkPermissions();
 		$out = $this->getOutput();
 
-		$out->setPageTitle( $this->msg( 'multipurge-form-title' ) );
+		$out->setPageTitleMsg( $this->msg( 'multipurge-form-title' ) );
 
 		$formDescriptor = [
 			'target' => [
