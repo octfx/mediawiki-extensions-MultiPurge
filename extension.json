@@ -50,6 +50,10 @@
 		"MultiPurgeRunInQueue": {
 			"description": "Push purge jobs to the job queue instead of running it in sync.",
 			"value": false
+		},
+		"MultiPurgeWarmParserCacheOnRefreshLinks": {
+			"description": "Save the output of non-recursive links updates, such as a template cascade's RefreshLinksJob, over the page's existing parser cache entry, then update page_touched and purge the page.",
+			"value": false
 		}
 	},
 	"ConfigRegistry": {
@@ -69,7 +73,8 @@
 	"Hooks": {
 		"LocalFilePurgeThumbnails": "purge",
 		"ArticlePurge": "purge",
-		"EditPage::attemptSave:after": "purge"
+		"EditPage::attemptSave:after": "purge",
+		"LinksUpdateComplete": "linksupdate"
 	},
 	"HookHandlers": {
 		"purge": {
@@ -79,6 +84,15 @@
 				"JobQueueGroup",
 				"ResourceLoader",
 				"UrlUtils"
+			]
+		},
+		"linksupdate": {
+			"factory": "MediaWiki\\Extension\\MultiPurge\\Hooks\\LinksUpdateHooks::factory",
+			"services": [
+				"MainConfig",
+				"ParserCache",
+				"WikiPageFactory",
+				"ConnectionProvider"
 			]
 		}
 	},

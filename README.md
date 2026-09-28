@@ -19,7 +19,17 @@ For a custom CDN purger:
 | `$wgMultiPurgeVarnishServers`          | null             | String/Array - Array of URLs pointing to your Varnish Servers. Can be IPs                                                                               |
 | `$wgMultiPurgeEnabledServices`         | null             | Array - List of enabled services. Possible values are 'Cloudflare', 'Varnish'                                                                           |
 | `$wgMultiPurgeServiceOrder`            | null             | Array - List of service purge order. Possible values are 'Cloudflare', 'Varnish'. Example: ['Varnish', 'Cloudflare'] purges varnish, then cloudflare    |
+| `$wgMultiPurgeWarmParserCacheOnRefreshLinks` | false      | Bool - Keep pages re-rendered after a template edit in the parser cache. See below                                                                      |
 | `$wgMultiPurgeCloudFlareUrlsPerRequest` | 100             | Int - Maximum URLs in one Cloudflare purge request. Cloudflare allows 100 on the Free, Pro and Business plans and 500 on Enterprise                      |
+
+
+## Parser cache warm-up
+
+When a template or module is edited, MediaWiki re-renders every page that uses it in the background, then throws the result away, so each page is parsed again the next time someone views it.
+
+With `$wgMultiPurgeWarmParserCacheOnRefreshLinks = true`, MultiPurge keeps that render and purges the page from your CDN, so the page doesn't have to be parsed a second time. It only does this for pages that are still in the parser cache, so warming doesn't push out pages that are read more often. Each page is purged separately, so editing a widely used template sends more purge requests to your CDN. Wikis using Parsoid read views are not covered.
+
+The background render has to come from the same parser as page views. MediaWiki 1.47 renders it with Parsoid by default, so on a wiki whose readers still get the legacy parser, set `$wgUseParsoidLinksUpdate = null` for the warm-up to take effect.
 
 
 ## Special Page
