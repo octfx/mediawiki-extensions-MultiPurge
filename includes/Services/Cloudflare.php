@@ -60,7 +60,7 @@ class Cloudflare implements PurgeServiceInterface {
 		foreach ( array_chunk( $urls, $chunkSize ) as $chunk ) {
 			try {
 				$requests[] = $this->makeRequest( $chunk );
-			} catch ( JsonException $e ) {
+			} catch ( JsonException ) {
 				// Shouldn't really happen
 				continue;
 			}

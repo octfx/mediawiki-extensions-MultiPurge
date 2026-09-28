@@ -21,6 +21,13 @@ jobs:
       lint-php: true
       runner: ubuntu-24.04-arm
 
+  analyze-php:
+    uses: StarCitizenTools/mediawiki-ci-workflows/.github/workflows/analyze-php.yml@main
+    with:
+      project-type: extension
+      project-name: MultiPurge
+      runner: ubuntu-24.04-arm
+
   test-php:
     uses: StarCitizenTools/mediawiki-ci-workflows/.github/workflows/test-php.yml@main
     with:

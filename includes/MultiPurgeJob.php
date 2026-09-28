@@ -44,7 +44,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	/**
 	 * Returns all enabled services in order as an array
 	 *
-	 * @return PurgeServiceInterface[]
+	 * @return string[]
 	 */
 	public static function getServiceOrder(): array {
 		$extensionConfig = MediaWikiServices::getInstance()
@@ -54,7 +54,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		$services = $extensionConfig->get( 'MultiPurgeEnabledServices' );
 		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services: %s', json_encode( $services ) ) );
 
-		if ( empty( $services ) ) {
+		if ( !$services ) {
 			wfDebugLog( 'MultiPurge', 'Services empty' );
 			return [];
 		}
@@ -64,9 +64,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' ) ?? $services;
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
-		if ( !empty( $serviceOrder ) ) {
-			$serviceOrder = array_map( [ __CLASS__, 'normalizeServiceName' ], $serviceOrder );
-		}
+		$serviceOrder = array_map( [ __CLASS__, 'normalizeServiceName' ], $serviceOrder );
 
 		$enabled = array_intersect( $serviceOrder, $services );
 

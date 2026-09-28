@@ -35,7 +35,12 @@
 		],
 		"phan": "phan -d . --long-progress-bar",
 		"phpcs": "phpcs -sp --cache",
-		"phpunit": "cd ../../ && composer phpunit -- extensions/MultiPurge/tests/phpunit/"
+		"phpunit": "cd ../../ && composer phpunit -- extensions/MultiPurge/tests/phpunit/",
+		"preflight": [
+			"@test",
+			"@phan",
+			"@phpunit"
+		]
 	},
 	"extra": {
 		"installer-name": "MultiPurge"

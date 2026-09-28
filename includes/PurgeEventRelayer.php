@@ -12,11 +12,11 @@ class PurgeEventRelayer extends EventRelayer {
 	/**
 	 * @param string $channel
 	 * @param array $events
-	 * @return void
+	 * @return bool
 	 */
-	protected function doNotify( $channel, array $events ) {
+	protected function doNotify( $channel, array $events ): bool {
 		if ( $channel !== 'cdn-url-purges' ) {
-			return;
+			return true;
 		}
 
 		$urls = array_filter( array_map( static function ( array $purgeUrl ) {
@@ -31,7 +31,7 @@ class PurgeEventRelayer extends EventRelayer {
 		);
 
 		if ( !$run ) {
-			return;
+			return true;
 		}
 
 		wfDebugLog( 'MultiPurge', 'Running Job' );
@@ -47,17 +47,19 @@ class PurgeEventRelayer extends EventRelayer {
 			} else {
 				try {
 					$status = $job->run();
-				} catch ( Exception $e ) {
+				} catch ( Exception ) {
 					$status = false;
 				}
 				wfDebugLog(
 					'MultiPurge',
 					sprintf(
 						'Job Status: %s',
-						( $status === true ? 'success' : 'error' )
+						( $status ? 'success' : 'error' )
 					)
 				);
 			}
 		}
+
+		return true;
 	}
 }

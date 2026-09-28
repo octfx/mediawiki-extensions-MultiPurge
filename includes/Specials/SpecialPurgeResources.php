@@ -49,20 +49,20 @@ class SpecialPurgeResources extends SpecialPage {
 				'section' => 'title',
 				'class' => 'HTMLTextField',
 				'required' => true,
-				'default' => !empty( $sub ) ? $sub : null,
+				'default' => $sub ?: null,
 			],
 		];
 
 		$showPurge = false;
 
-		if ( !empty( $sub ) ) {
+		if ( $sub ) {
 			$content = $this->loadContent( $sub );
 
 			if ( $content !== false ) {
 				$formDescriptor = array_merge( $formDescriptor, $this->makeSelects( $this->parseLoads( $content ) ) );
 				$showPurge = true;
 			} else {
-				$out->prependHTML( $this->msg( 'multipurge-special-invalid-title' )->plain() );
+				$out->prependHTML( $this->msg( 'multipurge-special-invalid-title' )->escaped() );
 			}
 		}
 
@@ -87,7 +87,7 @@ class SpecialPurgeResources extends SpecialPage {
 	 * @return false|string
 	 */
 	private function loadContent( string $sub ) {
-		if ( empty( $sub ) ) {
+		if ( !$sub ) {
 			return false;
 		}
 
@@ -98,7 +98,9 @@ class SpecialPurgeResources extends SpecialPage {
 		}
 
 		$content = MediaWikiServices::getInstance()->getHttpRequestFactory()->get(
-			$title->getFullURL( '', false, PROTO_HTTPS )
+			$title->getFullURL( '', false, PROTO_HTTPS ),
+			[],
+			__METHOD__
 		);
 
 		return $content ?? false;
@@ -107,7 +109,7 @@ class SpecialPurgeResources extends SpecialPage {
 	/**
 	 * @param array $formData
 	 * @param OOUIHTMLForm $form
-	 * @return string|void
+	 * @return Message|Status|void
 	 */
 	public static function trySubmit( $formData, $form ) {
 		if ( !isset( $formData['styles'] ) ) {
@@ -138,7 +140,7 @@ class SpecialPurgeResources extends SpecialPage {
 			sprintf( 'Purging urls from Special Page: %s', json_encode( $urls ) )
 		);
 
-		if ( !empty( $urls ) ) {
+		if ( $urls ) {
 			$job = new MultiPurgeJob( [
 				'urls' => $urls,
 			] );
@@ -148,7 +150,7 @@ class SpecialPurgeResources extends SpecialPage {
 					return new Message( 'multipurge-special-purge-success' );
 					// return Status::newGood();
 				}
-			} catch ( Exception $e ) {
+			} catch ( Exception ) {
 				// Fall through
 			}
 
@@ -223,7 +225,7 @@ class SpecialPurgeResources extends SpecialPage {
 	private function makeSelects( array $loads ): array {
 		try {
 			$statics = MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeStaticPurges' );
-		} catch ( ConfigException $e ) {
+		} catch ( ConfigException ) {
 			$statics = [];
 		}
 
@@ -242,7 +244,7 @@ class SpecialPurgeResources extends SpecialPage {
 			];
 		}
 
-		if ( !empty( $selects ) ) {
+		if ( $selects ) {
 			// Use path as key
 			if ( !is_string( array_keys( $statics )[0] ) ) {
 				$selects = array_combine( $statics, $statics );

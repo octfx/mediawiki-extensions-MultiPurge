@@ -31,9 +31,9 @@ class Varnish implements PurgeServiceInterface {
 	public function getPurgeRequest( $urls ): array {
 		$varnishServers = $this->extensionConfig->get( 'MultiPurgeVarnishServers' );
 		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
-		$host = parse_url( $server )['host'];
+		$host = parse_url( $server, PHP_URL_HOST );
 
-		if ( empty( $varnishServers ) ) {
+		if ( !$varnishServers ) {
 			return [];
 		}
 
@@ -60,7 +60,7 @@ class Varnish implements PurgeServiceInterface {
 				}
 
 				try {
-					if ( !empty( $parsedUrl ) ) {
+					if ( $parsedUrl ) {
 						// Based on https://varnish-cache.org/docs/4.0/users-guide/purging.html
 						$parsedUrl = $this->buildUrl( $parsedUrl );
 

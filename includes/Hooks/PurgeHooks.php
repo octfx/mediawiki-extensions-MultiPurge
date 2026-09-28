@@ -4,7 +4,6 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
-use Article;
 use Exception;
 use ExtensionRegistry;
 use File;
@@ -140,13 +139,11 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	 * @return void
 	 */
 	public function onArticlePurge( $wikiPage ): void {
-		if ( $this->isFile( $wikiPage ) ) {
+		if ( $wikiPage instanceof WikiFilePage && $wikiPage->getTitle()->getNamespace() === NS_FILE ) {
 			$files = $this->getThumbnails( $wikiPage->getFile() );
 			// Remove mwbackend link
 			array_shift( $files );
 			$urls = $this->linkThumbnails( $files, $wikiPage->getFile() );
-		} elseif ( $wikiPage->getTitle() === null ) {
-			return;
 		} else {
 			$urls = $this->cacheUpdater->getUrls( $wikiPage->getTitle() );
 		}
@@ -177,7 +174,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 
 	/**
 	 * Returns an array of thumbnail urls for this wiki file
-	 * This is an evil hack if you are on <= 1.35.2 as we change the visibility of the method to public
+	 * File::getThumbnails() is protected, so it is called through reflection
 	 *
 	 * @param File|WikiFilePage $page
 	 * @return array
@@ -189,24 +186,20 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			$file = $page->getFile();
 		}
 
-		if ( $file === false || !method_exists( $file, 'getThumbnails' ) ) {
+		if ( !method_exists( $file, 'getThumbnails' ) ) {
 			return [];
 		}
 
 		$refObject = new ReflectionObject( $file );
 		try {
 			$refMethod = $refObject->getMethod( 'getThumbnails' );
-		} catch ( ReflectionException $e ) {
+		} catch ( ReflectionException ) {
 			return [];
-		}
-
-		if ( $refMethod->isPublic() ) {
-			return $file->getThumbnails();
 		}
 
 		try {
 			$thumbnails = $refMethod->invoke( $file );
-		} catch ( ReflectionException $e ) {
+		} catch ( ReflectionException ) {
 			$thumbnails = [];
 		}
 
@@ -266,7 +259,7 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 	private function runPurge( array $urls ): void {
 		$urls = array_unique( $urls );
 
-		if ( empty( $urls ) ) {
+		if ( !$urls ) {
 			return;
 		}
 
@@ -283,32 +276,18 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 			} else {
 				try {
 					$status = $job->run();
-				} catch ( Exception $e ) {
+				} catch ( Exception ) {
 					$status = false;
 				}
 				wfDebugLog(
 					'MultiPurge',
 					sprintf(
 						'Job Status: %s',
-						( $status === true ? 'success' : 'error' )
+						( $status ? 'success' : 'error' )
 					)
 				);
 			}
 		}
-	}
-
-	/**
-	 * @param Article|WikiPage|Title $page
-	 * @return bool
-	 */
-	private function isFile( $page ): bool {
-		if ( $page instanceof Title ) {
-			return $page->getNamespace() === NS_FILE;
-		}
-
-		return $page instanceof WikiFilePage &&
-			$page->getTitle() !== null &&
-			$page->getTitle()->getNamespace() === NS_FILE;
 	}
 
 	/**
