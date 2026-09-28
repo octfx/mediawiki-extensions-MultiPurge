@@ -4,6 +4,7 @@ namespace MediaWiki\Extension\MultiPurge\Tests\Services;
 
 use Exception;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
+use MediaWiki\MainConfigNames;
 
 /**
  * @group MultiPurge
@@ -120,5 +121,46 @@ class CloudflareTest extends \MediaWikiIntegrationTestCase {
 		// Every URL is sent twice, once per device type
 		$this->assertCount( 3, $requests );
 		$this->assertCount( 100, json_decode( $requests[0]['postData'], true )['files'] );
+	}
+
+	/**
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::getPurgeRequest
+	 * @dataProvider provideUrls
+	 * @param string $server
+	 * @param string $url
+	 * @param string $expected
+	 * @return void
+	 * @throws Exception
+	 */
+	public function testMakesUrlsAbsoluteHttps( string $server, string $url, string $expected ) {
+		$this->overrideConfigValues( [ MainConfigNames::Server => $server ] );
+		$cf = new Cloudflare( $this->getServiceContainer()->getMainConfig() );
+
+		$requests = $cf->getPurgeRequest( $url );
+
+		$this->assertSame( [ $expected ], json_decode( $requests[0]['postData'], true )['files'] );
+	}
+
+	public static function provideUrls(): array {
+		return [
+			'relative, as core passes file URLs' => [
+				'https://wiki.example', '/images/a/ab/Foo.png', 'https://wiki.example/images/a/ab/Foo.png'
+			],
+			'relative, with an http server' => [
+				'http://wiki.example', '/images/a/ab/Foo.png', 'https://wiki.example/images/a/ab/Foo.png'
+			],
+			'relative, with a protocol-relative server' => [
+				'//wiki.example', '/images/a/ab/Foo.png', 'https://wiki.example/images/a/ab/Foo.png'
+			],
+			'protocol-relative' => [
+				'https://wiki.example', '//static.example/Foo.png', 'https://static.example/Foo.png'
+			],
+			'http' => [
+				'https://wiki.example', 'http://wiki.example/wiki/Foo', 'https://wiki.example/wiki/Foo'
+			],
+			'https' => [
+				'https://wiki.example', 'https://wiki.example/wiki/Foo', 'https://wiki.example/wiki/Foo'
+			],
+		];
 	}
 }

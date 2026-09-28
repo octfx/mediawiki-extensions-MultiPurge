@@ -6,6 +6,7 @@ namespace MediaWiki\Extension\MultiPurge\Services;
 
 use JsonException;
 use MediaWiki\Config\Config;
+use MediaWiki\MediaWikiServices;
 
 class Cloudflare implements PurgeServiceInterface {
 	private $extensionConfig;
@@ -36,11 +37,11 @@ class Cloudflare implements PurgeServiceInterface {
 			$urls = [ $urls ];
 		}
 
-		// Protocolize urls
-		$urls = array_map( static function ( string $url ) {
-			if ( substr( $url, 0, 2 ) === '//' ) {
-				$url = sprintf( 'https:%s', $url );
-			}
+		$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
+
+		// Cloudflare only purges absolute urls, but core passes file urls relative to $wgServer
+		$urls = array_map( static function ( string $url ) use ( $urlUtils ) {
+			$url = $urlUtils->expand( $url, PROTO_HTTPS ) ?? $url;
 
 			if ( substr( $url, 0, 5 ) === 'http:' ) {
 				$url = sprintf( 'https:%s', substr( $url, 5 ) );
