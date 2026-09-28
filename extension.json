@@ -71,7 +71,6 @@
 		"MediaWiki\\Extension\\MultiPurge\\": "includes/"
 	},
 	"Hooks": {
-		"LocalFilePurgeThumbnails": "purge",
 		"ArticlePurge": "purge",
 		"EditPage::attemptSave:after": "purge",
 		"LinksUpdateComplete": "linksupdate"

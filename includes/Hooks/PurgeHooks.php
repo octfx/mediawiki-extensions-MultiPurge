@@ -5,7 +5,6 @@ declare( strict_types=1 );
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
 use Exception;
-use ExtensionRegistry;
 use File;
 use JobQueueGroup;
 use MediaWiki\Cache\HtmlCacheUpdater;
@@ -14,7 +13,6 @@ use MediaWiki\Context\RequestContext;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
-use MediaWiki\Hook\LocalFilePurgeThumbnailsHook;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use MediaWiki\ResourceLoader\Context;
@@ -31,7 +29,7 @@ use WikiPage;
 /**
  * phpcs:disable MediaWiki.NamingConventions.LowerCamelFunctionsName.FunctionName
  */
-class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, EditPage__attemptSave_afterHook {
+class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 	private Config $config;
 	private HtmlCacheUpdater $cacheUpdater;
@@ -81,57 +79,6 @@ class PurgeHooks implements LocalFilePurgeThumbnailsHook, ArticlePurgeHook, Edit
 		);
 
 		return new self( $config, $cacheUpdater, $group, $rl, $utils );
-	}
-
-	/**
-	 * Retrieve a list of thumbnail URLs that needs to be purged
-	 *
-	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/LocalFilePurgeThumbnails
-	 *
-	 * @param File $file The File of which the thumbnails are being purged
-	 * @param string $archiveName Name of an old file version or false if it's the current one
-	 * @param string[] $urls Array of URLs to purge from the caches, to be manipulated
-	 */
-	public function onLocalFilePurgeThumbnails( $file, $archiveName, $urls ): void {
-		$transformerUrls = [];
-
-		if ( ExtensionRegistry::getInstance()->isLoaded( 'WebP' ) ) {
-			$config = MediaWikiServices::getInstance()->getMainConfig();
-			// All this should ideally be offloaded to Ext:WebP
-			$transformers = $config->get( 'EnabledTransformers' );
-
-			foreach ( $transformers as $transformer ) {
-				$dir = $transformer::getFileExtension();
-
-				foreach ( $urls as $url ) {
-					$url = $transformer::changeExtension( $url );
-					$pos = strpos( $url, 'thumb' ) + 5;
-					$url = substr_replace( $url, '/' . $dir, $pos, 0 );
-					$transformerUrls[] = $url;
-
-					if ( $config->get( 'ResponsiveImages' ) ) {
-						foreach ( [ 1.5, 2 ] as $resolution ) {
-
-							$match = preg_match( '/\/(\d+)px/', $url, $matches );
-							if ( $match !== 1 || !isset( $matches[1] ) ) {
-								continue;
-							}
-
-							$res = (int)$matches[1] * $resolution;
-							$suffix = 'px-';
-							$transformerUrls[] = str_replace(
-								$matches[1] . $suffix, (string)$res . $suffix,
-								$url
-							);
-						}
-					}
-				}
-			}
-		}
-
-		$urls = [ ...$urls, ...$transformerUrls ];
-
-		$this->runPurge( $urls );
 	}
 
 	/**
