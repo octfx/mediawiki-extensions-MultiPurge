@@ -71,8 +71,12 @@ class LinksUpdateHooksTest extends MediaWikiIntegrationTestCase {
 		$page = $services->getWikiPageFactory()->newFromTitle( Title::newFromText( self::PAGE ) );
 		$parserOptions = ParserOptions::newFromAnon();
 		$parserOptions->setRenderReason( 'page_view' );
+		// MW 1.47 deprecated int options in favour of an OPT_XXX => bool map
+		$accessOptions = version_compare( MW_VERSION, '1.47', '<' ) ?
+			$options :
+			( $options === 0 ? [] : [ $options => true ] );
 		$this->assertStatusGood(
-			$services->getParserOutputAccess()->getParserOutput( $page, $parserOptions, null, $options )
+			$services->getParserOutputAccess()->getParserOutput( $page, $parserOptions, null, $accessOptions )
 		);
 	}
 
@@ -242,8 +246,9 @@ class LinksUpdateHooksTest extends MediaWikiIntegrationTestCase {
 		if ( version_compare( MW_VERSION, '1.47', '<' ) ) {
 			$this->markTestSkipped( 'Before MW 1.47, RefreshLinksJob always uses the parser page views use' );
 		}
-		// Page views use the legacy parser, links updates Parsoid
-		$this->setUpCascade( true, [ 'UseParsoidLinksUpdate' => true ] );
+		// Page views use the legacy parser, links updates Parsoid. MW 1.47 defaults page views to
+		// Parsoid too, so the view side has to be forced back for the "another parser" premise.
+		$this->setUpCascade( true, [ 'UseParsoidParser' => false, 'UseParsoidLinksUpdate' => true ] );
 		$touched = $this->touched();
 
 		$this->runJobs( [], [ 'type' => 'refreshLinks' ] );
