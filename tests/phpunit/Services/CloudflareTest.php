@@ -41,6 +41,15 @@ class CloudflareTest extends \MediaWikiIntegrationTestCase {
 		$requests = $cf->getPurgeRequest( 'http://foo' );
 
 		$this->assertCount( 1, $requests );
+		$this->assertSame( 'https://api.cloudflare.com/client/v4/zones/foo/purge_cache', $requests[0]['url'] );
+
+		$this->overrideConfigValues( [ 'MultiPurgeCloudFlareBaseUrl' => 'http://egress-gateway:8081/' ] );
+
+		$cf = new Cloudflare( $this->getServiceContainer()->getMainConfig() );
+
+		$requests = $cf->getPurgeRequest( 'http://foo' );
+
+		$this->assertSame( 'http://egress-gateway:8081/client/v4/zones/foo/purge_cache', $requests[0]['url'] );
 	}
 
 	/**

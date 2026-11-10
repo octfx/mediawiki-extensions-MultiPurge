@@ -20,6 +20,10 @@
 			"description": "",
 			"value": null
 		},
+		"MultiPurgeCloudFlareBaseUrl": {
+			"description": "The base URL of Cloudflare's API domain, or an internal service URL such as an egress gateway.",
+			"value": "https://api.cloudflare.com"
+		},
 		"MultiPurgeCloudFlareCacheByDeviceType": {
 			"description": "Whether or not CloudFlare's cache by device type is enabled.",
 			"value": false
