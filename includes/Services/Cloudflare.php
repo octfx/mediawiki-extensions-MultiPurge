@@ -88,6 +88,7 @@ class Cloudflare implements PurgeServiceInterface {
 	private function makeRequest( array $urls ): array {
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
+		$baseUrl = $this->extensionConfig->get( 'MultiPurgeCloudFlareBaseUrl' );
 		wfDebugLog(
 			'MultiPurge',
 			sprintf(
@@ -115,7 +116,7 @@ class Cloudflare implements PurgeServiceInterface {
 
 		return [
 			'method' => 'POST',
-			'url' => "https://api.cloudflare.com/client/v4/zones/$zoneId/purge_cache",
+			'url' => rtrim( $baseUrl, '/' ) . "/client/v4/zones/$zoneId/purge_cache",
 			'headers' => [
 				'Connection' => 'Keep-Alive',
 				'Proxy-Connection' => 'Keep-Alive',

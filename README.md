@@ -20,7 +20,8 @@ For a custom CDN purger:
 | `$wgMultiPurgeEnabledServices`         | null             | Array - List of enabled services. Possible values are 'Cloudflare', 'Varnish'                                                                           |
 | `$wgMultiPurgeServiceOrder`            | null             | Array - List of service purge order. Possible values are 'Cloudflare', 'Varnish'. Example: ['Varnish', 'Cloudflare'] purges varnish, then cloudflare    |
 | `$wgMultiPurgeWarmParserCacheOnRefreshLinks` | false      | Bool - Keep pages re-rendered after a template edit in the parser cache. See below                                                                      |
-| `$wgMultiPurgeCloudFlareUrlsPerRequest` | 100             | Int - Maximum URLs in one Cloudflare purge request. Cloudflare allows 100 on the Free, Pro and Business plans and 500 on Enterprise                      |
+| `$wgMultiPurgeCloudFlareUrlsPerRequest` | 100             | Int - Maximum URLs in one Cloudflare purge request. Cloudflare allows 100 on the Free, Pro and Business plans and 500 on Enterprise                     |
+| `$wgMultiPurgeCloudFlareBaseUrl`       | `"https://api.cloudflare.com"` | String - The base URL of Cloudflare's API domain, or an internal service URL such as an egress gateway.                                   |
 
 
 ## Parser cache warm-up
