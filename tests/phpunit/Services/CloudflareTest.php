@@ -118,9 +118,31 @@ class CloudflareTest extends \MediaWikiIntegrationTestCase {
 
 		$requests = $cf->getPurgeRequest( array_map( static fn ( $i ) => "https://foo$i", range( 1, 150 ) ) );
 
-		// Every URL is sent twice, once per device type
-		$this->assertCount( 3, $requests );
-		$this->assertCount( 100, json_decode( $requests[0]['postData'], true )['files'] );
+		// Every URL is sent three times, once per device type:
+		// four requests of 33 URLs (99 files), then one of 18 URLs (54 files)
+		$this->assertCount( 5, $requests );
+		$this->assertCount( 99, json_decode( $requests[0]['postData'], true )['files'] );
+		$this->assertCount( 54, json_decode( $requests[4]['postData'], true )['files'] );
+	}
+
+	/**
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::getPurgeRequest
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Cloudflare::makeRequest
+	 * @return void
+	 * @throws Exception
+	 */
+	public function testPurgesEveryDeviceType() {
+		$this->overrideConfigValues( [ 'MultiPurgeCloudFlareCacheByDeviceType' => true ] );
+		$cf = new Cloudflare( $this->getServiceContainer()->getMainConfig() );
+		$url = 'https://wiki.example/wiki/Foo';
+
+		$requests = $cf->getPurgeRequest( $url );
+
+		$this->assertSame( [
+			[ 'url' => $url, 'headers' => [ 'CF-Device-Type' => 'desktop' ] ],
+			[ 'url' => $url, 'headers' => [ 'CF-Device-Type' => 'mobile' ] ],
+			[ 'url' => $url, 'headers' => [ 'CF-Device-Type' => 'tablet' ] ],
+		], json_decode( $requests[0]['postData'], true )['files'] );
 	}
 
 	/**

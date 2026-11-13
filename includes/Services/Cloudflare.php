@@ -9,6 +9,14 @@ use MediaWiki\Config\Config;
 use MediaWiki\MediaWikiServices;
 
 class Cloudflare implements PurgeServiceInterface {
+	/**
+	 * Cloudflare classifies every request as one of these device types, and cache by device type
+	 * keeps a separate entry for each.
+	 *
+	 * @see https://developers.cloudflare.com/cache/how-to/cache-keys/
+	 */
+	private const DEVICE_TYPES = [ 'desktop', 'mobile', 'tablet' ];
+
 	private $extensionConfig;
 
 	/**
@@ -53,9 +61,9 @@ class Cloudflare implements PurgeServiceInterface {
 		$requests = [];
 
 		$chunkSize = max( 1, (int)$this->extensionConfig->get( 'MultiPurgeCloudFlareUrlsPerRequest' ) );
-		// Cache by device type sends every URL twice, once per device type
+		// Cache by device type sends every URL once per device type
 		if ( $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ) {
-			$chunkSize = max( 1, intdiv( $chunkSize, 2 ) );
+			$chunkSize = max( 1, intdiv( $chunkSize, count( self::DEVICE_TYPES ) ) );
 		}
 
 		foreach ( array_chunk( $urls, $chunkSize ) as $chunk ) {
@@ -89,18 +97,21 @@ class Cloudflare implements PurgeServiceInterface {
 			)
 		);
 
-		$postData = [ 'files' => $urls ];
-
 		if ( $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ) {
+			$files = [];
 			foreach ( $urls as $url ) {
-				$postData['files'][] = [
-					'url' => $url,
-					'headers' => [ 'CF-Device-Type' => 'mobile' ]
-				];
+				foreach ( self::DEVICE_TYPES as $deviceType ) {
+					$files[] = [
+						'url' => $url,
+						'headers' => [ 'CF-Device-Type' => $deviceType ]
+					];
+				}
 			}
+		} else {
+			$files = $urls;
 		}
 
-		$postData = json_encode( $postData, JSON_THROW_ON_ERROR );
+		$postData = json_encode( [ 'files' => $files ], JSON_THROW_ON_ERROR );
 
 		return [
 			'method' => 'POST',
