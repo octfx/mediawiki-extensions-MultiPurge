@@ -4,9 +4,9 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Services;
 
+use InvalidArgumentException;
 use MediaWiki\Config\Config;
 use MediaWiki\MediaWikiServices;
-use RuntimeException;
 
 class Varnish implements PurgeServiceInterface {
 	private $extensionConfig;
@@ -49,46 +49,50 @@ class Varnish implements PurgeServiceInterface {
 
 		foreach ( $urls as $url ) {
 			$parsedUrl = parse_url( $url );
+			if ( $parsedUrl === false ) {
+				// Dropping the target silently would let the caller report a purge that never ran.
+				throw new InvalidArgumentException( sprintf( 'Failed to parse purge target URL "%s".', $url ) );
+			}
+
 			foreach ( $varnishServers as $varnishServer ) {
+				$components = $parsedUrl;
+				// The destination port comes from the server config, not the wiki URL.
+				unset( $components['port'] );
+
 				if ( filter_var( $varnishServer, FILTER_VALIDATE_IP ) ) {
-					$parsedUrl['scheme'] = 'http';
-					$parsedUrl['host'] = $varnishServer;
+					$components['scheme'] = 'http';
+					$components['host'] = $varnishServer;
 				} else {
 					$parsedVarnish = parse_url( $varnishServer );
-					$parsedUrl['scheme'] = $parsedVarnish['scheme'] ?? 'http';
-					$parsedUrl['host'] = $parsedVarnish['host'] ?? $varnishServer;
-				}
-
-				try {
-					if ( $parsedUrl ) {
-						// Based on https://varnish-cache.org/docs/4.0/users-guide/purging.html
-						$parsedUrl = $this->buildUrl( $parsedUrl );
-
-						$requests[] = [
-							'method' => 'PURGE',
-							'url' => $parsedUrl,
-							'timeout' => 30,
-							'connectTimeout' => 30,
-							'headers' => [
-								'Host' => $host,
-								'Connection' => 'Keep-Alive',
-								'Proxy-Connection' => 'Keep-Alive',
-								'User-Agent' => 'MediaWiki/ext-multipurge-' . MW_VERSION . ' ' . __CLASS__,
-							]
-						];
-						wfDebugLog(
-							'MultiPurge',
-							sprintf(
-								'Adding "%s" to Varnish Purge Requests with Host Header "%s".',
-								$parsedUrl,
-								$host
-							)
-						);
+					$components['scheme'] = $parsedVarnish['scheme'] ?? 'http';
+					$components['host'] = $parsedVarnish['host'] ?? $varnishServer;
+					if ( isset( $parsedVarnish['port'] ) ) {
+						$components['port'] = $parsedVarnish['port'];
 					}
-				} catch ( RuntimeException $e ) {
-					wfLogWarning( sprintf( '[MultiPurge] %s', $e->getMessage() ) );
-					continue;
 				}
+
+				$requestUrl = $this->buildUrl( $components );
+
+				$requests[] = [
+					'method' => 'PURGE',
+					'url' => $requestUrl,
+					'timeout' => 30,
+					'connectTimeout' => 30,
+					'headers' => [
+						'Host' => $host,
+						'Connection' => 'Keep-Alive',
+						'Proxy-Connection' => 'Keep-Alive',
+						'User-Agent' => 'MediaWiki/ext-multipurge-' . MW_VERSION . ' ' . __CLASS__,
+					]
+				];
+				wfDebugLog(
+					'MultiPurge',
+					sprintf(
+						'Adding "%s" to Varnish Purge Requests with Host Header "%s".',
+						$requestUrl,
+						$host
+					)
+				);
 			}
 		}
 
@@ -98,19 +102,11 @@ class Varnish implements PurgeServiceInterface {
 	}
 
 	/**
-	 * Replaces the wikis host with the configured varnish host
-	 *
 	 * @param array $components
 	 * @return string
 	 */
 	private function buildUrl( array $components ): string {
-		$url = $components['scheme'] . '://';
-
-		if ( isset( $components['username'] ) && isset( $components['password'] ) ) {
-			$url .= $components['username'] . ':' . $components['password'] . '@';
-		}
-
-		$url .= $components['host'];
+		$url = $components['scheme'] . '://' . $components['host'];
 
 		if ( isset( $components['port'] ) &&
 			( ( $components['scheme'] === 'http' && $components['port'] !== 80 ) ||
