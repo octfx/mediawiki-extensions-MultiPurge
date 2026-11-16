@@ -8,7 +8,7 @@ use MediaWiki\Config\Config;
 use MediaWiki\Extension\MultiPurge\PurgeUrlPolicy;
 use MediaWiki\MediaWikiServices;
 
-class Varnish implements PurgeServiceInterface {
+class Varnish implements StreamingPurgeService {
 	private $extensionConfig;
 
 	/**
@@ -27,12 +27,21 @@ class Varnish implements PurgeServiceInterface {
 
 	/**
 	 * @inheritDoc
+	 * Array output stays for callers that want everything at once.
+	 * The job reads yieldPurgeRequests() so a large batch never materializes.
 	 */
 	public function getPurgeRequest( $urls ): array {
+		return iterator_to_array( $this->yieldPurgeRequests( $urls ), false );
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public function yieldPurgeRequests( $urls ): iterable {
 		$varnishServers = $this->extensionConfig->get( 'MultiPurgeVarnishServers' );
 
 		if ( !$varnishServers ) {
-			return [];
+			return;
 		}
 
 		if ( !is_array( $urls ) ) {
@@ -48,7 +57,7 @@ class Varnish implements PurgeServiceInterface {
 			$this->extensionConfig
 		);
 
-		$requests = [];
+		$count = 0;
 
 		foreach ( $urls as $url ) {
 			$target = $policy->resolve( $url, $reason );
@@ -86,7 +95,7 @@ class Varnish implements PurgeServiceInterface {
 
 				$requestUrl = $this->buildUrl( $components );
 
-				$requests[] = [
+				yield [
 					'method' => 'PURGE',
 					'url' => $requestUrl,
 					'timeout' => 30,
@@ -98,6 +107,7 @@ class Varnish implements PurgeServiceInterface {
 						'User-Agent' => 'MediaWiki/ext-multipurge-' . MW_VERSION . ' ' . __CLASS__,
 					]
 				];
+				$count++;
 				// This channel logs the validated Host header only; the request URL carries the target path.
 				// MediaWiki's HTTP client logs the URL itself, as documented.
 				wfDebugLog(
@@ -110,9 +120,7 @@ class Varnish implements PurgeServiceInterface {
 			}
 		}
 
-		wfDebugLog( 'MultiPurge', sprintf( 'Created %d Varnish Purge Requests', count( $requests ) ) );
-
-		return $requests;
+		wfDebugLog( 'MultiPurge', sprintf( 'Created %d Varnish Purge Requests', $count ) );
 	}
 
 	/**

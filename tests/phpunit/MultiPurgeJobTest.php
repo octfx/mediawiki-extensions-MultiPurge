@@ -102,7 +102,8 @@ class MultiPurgeJobTest extends MediaWikiIntegrationTestCase {
 		] );
 
 		$multiMock = $this->getMockBuilder( MultiHttpClient::class )->disableOriginalConstructor()->getMock();
-		$multiMock->expects( $this->once() )->method( 'runMulti' )->willReturn( [
+		// Batches are submitted per service, so each enabled service gets its own runMulti() call.
+		$multiMock->expects( $this->exactly( 2 ) )->method( 'runMulti' )->willReturn( [
 			[ 'response' => [ 200, null, null, null, null ] ],
 		] );
 
@@ -139,6 +140,7 @@ class MultiPurgeJobTest extends MediaWikiIntegrationTestCase {
 		] );
 
 		$multiMock = $this->getMockBuilder( MultiHttpClient::class )->disableOriginalConstructor()->getMock();
+		// No Varnish servers are configured, so only Cloudflare submits a batch.
 		$multiMock->expects( $this->once() )->method( 'runMulti' )->willReturn( [
 			[ 'response' => [ 500, null, null, null, null ] ],
 		] );

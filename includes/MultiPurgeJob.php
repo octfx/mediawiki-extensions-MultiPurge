@@ -11,12 +11,21 @@ use Job;
 use MediaWiki\Config\Config;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\PurgeServiceInterface;
+use MediaWiki\Extension\MultiPurge\Services\StreamingPurgeService;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
 use MediaWiki\MediaWikiServices;
 use ReflectionClass;
 use ReflectionException;
+use Wikimedia\Http\MultiHttpClient;
 
 class MultiPurgeJob extends Job implements GenericParameterJob {
+
+	/**
+	 * This is the hard ceiling of request maps handed to one MultiHttpClient::runMulti() call.
+	 * The one size bounds request generation, submission, and response accumulation.
+	 * Each batch is consumed and checked before the job asks the service for more requests.
+	 */
+	public const MAX_REQUESTS_PER_RUN_MULTI = 100;
 
 	/**
 	 * @var Config Extension config passed to each service
@@ -118,6 +127,10 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	 * @return bool
 	 */
 	public function run(): bool {
+		// A reused instance must report the state of the run just executed, never the previous one.
+		$this->sentPurgeRequests = false;
+		$this->droppedTargets = [];
+
 		if ( !isset( $this->params['service'] ) ) {
 			$enabled = self::getServiceOrder();
 		} else {
@@ -129,7 +142,9 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		$http = MediaWikiServices::getInstance()->getHttpRequestFactory()
 			->createMultiClient( [ 'maxConnsPerHost' => 8, 'usePipelining' => true ] );
 
-		$requests = [];
+		// Failures aggregate across batches and services instead of aborting at the first one.
+		$good = true;
+		$submitted = 0;
 
 		// Enforced here so every caller, including jobs queued earlier, filters with the policy in force at run time.
 		$policy = PurgeUrlPolicy::newFromConfigs(
@@ -164,8 +179,18 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			}
 
 			try {
-				foreach ( $this->getPurgeService( $service )->getPurgeRequest( $urls ) as $request ) {
-					$requests[] = $request;
+				$purgeService = $this->getPurgeService( $service );
+				$batch = [];
+				foreach ( $purgeService->yieldPurgeRequests( $urls ) as $request ) {
+					$batch[] = $request;
+					if ( count( $batch ) < self::MAX_REQUESTS_PER_RUN_MULTI ) {
+						continue;
+					}
+					$submitted += $this->flushBatch( $http, $batch, $submitted, $good );
+					$batch = [];
+				}
+				if ( $batch !== [] ) {
+					$submitted += $this->flushBatch( $http, $batch, $submitted, $good );
 				}
 			} catch ( ReflectionException $e ) {
 				wfDebugLog( 'MultiPurge', $e->getMessage() );
@@ -173,14 +198,45 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			}
 		}
 
+		return $good;
+	}
+
+	/**
+	 * Submits one pending batch, records its outcome, and returns how many requests it carried.
+	 * A failed batch must not discard later batches or services, so its failure is folded into $good.
+	 *
+	 * @param MultiHttpClient $http
+	 * @param array[] $batch At most MAX_REQUESTS_PER_RUN_MULTI request maps
+	 * @param int $submitted Requests already submitted in this run
+	 * @param bool &$good Aggregated success of the whole run
+	 * @return int Number of requests submitted in this batch
+	 */
+	private function flushBatch( MultiHttpClient $http, array $batch, int $submitted, bool &$good ): int {
+		if ( !$this->submitBatch( $http, $batch, $submitted ) ) {
+			$good = false;
+		}
+
+		return count( $batch );
+	}
+
+	/**
+	 * Sends one bounded batch of requests and checks its responses.
+	 * The batch is discarded once checked, which is what keeps response accumulation bounded.
+	 *
+	 * @param MultiHttpClient $http
+	 * @param array[] $requests At most MAX_REQUESTS_PER_RUN_MULTI request maps
+	 * @param int $firstRequestIndex Number of requests already submitted in this run
+	 * @return bool Whether every request in this batch succeeded
+	 */
+	private function submitBatch( MultiHttpClient $http, array $requests, int $firstRequestIndex ): bool {
+		// Distinguishes dispatched HTTP work from runs that returned success while sending nothing.
+		$this->sentPurgeRequests = true;
+
 		wfDebugLog( 'MultiPurge', sprintf( 'Calling %d purge urls', count( $requests ) ) );
 
-		// Distinguishes dispatched HTTP work from runs that returned success while sending nothing.
-		$this->sentPurgeRequests = $requests !== [];
-
 		try {
-			// An empty batch means every target was rejected or every service vetoed; nothing to send or fail on.
-			$statuses = $requests ? $http->runMulti( $requests ) : [];
+			// An exception here fails only this batch; the remaining batches and services still get their chance.
+			$statuses = $http->runMulti( $requests );
 		} catch ( Exception $e ) {
 			wfLogWarning( sprintf( '[MultiPurge]: %s', $e->getMessage() ) );
 			return false;
@@ -196,11 +252,11 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			// Any unsuccessful response, including 429, fails the job so the configured queue retries it.
 			// Queues without delayed-job support reject jobs that carry a custom release timestamp.
 			$status = $body ?? $error;
-			// The request is identified by position, never by URL.
+			// The request is identified by its position in the whole run, never by URL.
 			// The response body or transport error is logged verbatim as a diagnostic and may echo the target.
 			wfDebugLog(
 				'MultiPurge',
-				sprintf( 'Result for request %d is: %s', $index + 1, $status )
+				sprintf( 'Result for request %d is: %s', $firstRequestIndex + $index + 1, $status )
 			);
 			$good = false;
 		}
@@ -249,10 +305,10 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	 * Instantiates and sets up the service
 	 *
 	 * @param string $class
-	 * @return PurgeServiceInterface
+	 * @return StreamingPurgeService
 	 * @throws ReflectionException
 	 */
-	private function getPurgeService( string $class ): PurgeServiceInterface {
+	private function getPurgeService( string $class ): StreamingPurgeService {
 		$class = self::normalizeServiceName( $class );
 
 		if ( !in_array( $class, $this->availableServices ) ) {
@@ -264,7 +320,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		}
 
 		$ref = new ReflectionClass( $class );
-		/** @var PurgeServiceInterface $instance */
+		/** @var StreamingPurgeService $instance */
 		$instance = $ref->newInstanceArgs( [
 			$this->extensionConfig,
 			MediaWikiServices::getInstance()->getHttpRequestFactory()

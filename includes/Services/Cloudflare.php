@@ -9,7 +9,7 @@ use MediaWiki\Config\Config;
 use MediaWiki\Extension\MultiPurge\PurgeUrlPolicy;
 use MediaWiki\MediaWikiServices;
 
-class Cloudflare implements PurgeServiceInterface {
+class Cloudflare implements StreamingPurgeService {
 	/**
 	 * Cloudflare classifies every request as one of these device types, and cache by device type
 	 * keeps a separate entry for each.
@@ -35,13 +35,18 @@ class Cloudflare implements PurgeServiceInterface {
 	}
 
 	/**
-	 * Returns as array of purge requests
-	 * Chunks the request by $wgMultiPurgeCloudFlareUrlsPerRequest
-	 *
-	 * @param string|array $urls
-	 * @return array
+	 * @inheritDoc
+	 * Array output stays for callers that want everything at once.
+	 * The job reads yieldPurgeRequests() so a large batch never materializes.
 	 */
 	public function getPurgeRequest( $urls ): array {
+		return iterator_to_array( $this->yieldPurgeRequests( $urls ), false );
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public function yieldPurgeRequests( $urls ): iterable {
 		if ( !is_array( $urls ) ) {
 			$urls = [ $urls ];
 		}
@@ -54,8 +59,7 @@ class Cloudflare implements PurgeServiceInterface {
 		// Resolve to absolute HTTP(S) URLs on allowed hosts before anything reaches HTTP.
 		$urls = $policy->resolveList( $urls );
 
-		// Cloudflare only purges absolute urls; existing behavior sends http targets as https.
-		// Whether both schemes share a cache entry depends on the zone's cache key configuration.
+		// Cloudflare receives HTTPS targets; whether the schemes share a cache entry depends on the zone's cache key.
 		$urls = array_map( static function ( string $url ): string {
 			if ( strncasecmp( $url, 'http:', 5 ) === 0 ) {
 				$url = sprintf( 'https:%s', substr( $url, 5 ) );
@@ -64,29 +68,23 @@ class Cloudflare implements PurgeServiceInterface {
 			return $url;
 		}, $urls );
 
-		$requests = [];
-
 		$chunkSize = max( 1, (int)$this->extensionConfig->get( 'MultiPurgeCloudFlareUrlsPerRequest' ) );
-		// Cache by device type sends every URL once per device type
 		if ( $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ) {
 			$chunkSize = max( 1, intdiv( $chunkSize, count( self::DEVICE_TYPES ) ) );
 		}
 
-		foreach ( array_chunk( $urls, $chunkSize ) as $chunk ) {
+		// Slicing by offset keeps only one chunk of URLs alive at a time instead of a list of every chunk request.
+		$total = count( $urls );
+		for ( $offset = 0; $offset < $total; $offset += $chunkSize ) {
 			try {
-				$requests[] = $this->makeRequest( $chunk );
+				yield $this->makeRequest( array_slice( $urls, $offset, $chunkSize ) );
 			} catch ( JsonException ) {
-				// Shouldn't really happen
 				continue;
 			}
 		}
-
-		return $requests;
 	}
 
 	/**
-	 * Create the actual request for the given urls
-	 *
 	 * @param array $urls
 	 * @return array
 	 * @throws JsonException
