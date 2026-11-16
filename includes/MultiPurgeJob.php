@@ -29,6 +29,21 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	private $serviceContainer = [];
 
 	/**
+	 * Whether the last run() submitted at least one purge request to the HTTP client.
+	 * Set false by a hook veto or a post-hook policy check that leaves no targets, which still return success.
+	 *
+	 * @var bool
+	 */
+	private bool $sentPurgeRequests = false;
+
+	/**
+	 * Original targets the service hook or the post-hook policy removed from the last run.
+	 *
+	 * @var string[]
+	 */
+	private array $droppedTargets = [];
+
+	/**
 	 * List of available purge services
 	 *
 	 * @var string[]
@@ -141,6 +156,9 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			// A rejected target is a permanent policy violation: it is logged and skipped, never retried or fatal here.
 			$urls = $policy->resolveList( $urls );
 
+			// A hook that trims or replaces targets sends partial work, which callers must be able to distinguish.
+			$this->droppedTargets = array_merge( $this->droppedTargets, array_diff( $this->params['urls'], $urls ) );
+
 			if ( !$urls ) {
 				continue;
 			}
@@ -156,6 +174,9 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		}
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Calling %d purge urls', count( $requests ) ) );
+
+		// Distinguishes dispatched HTTP work from runs that returned success while sending nothing.
+		$this->sentPurgeRequests = $requests !== [];
 
 		try {
 			// An empty batch means every target was rejected or every service vetoed; nothing to send or fail on.
@@ -185,6 +206,27 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		}
 
 		return $good;
+	}
+
+	/**
+	 * Whether run() submitted at least one purge request to the HTTP client.
+	 * Lets callers tell a vetoed or fully filtered run, which still returns true, from real HTTP work.
+	 * Queue semantics are unchanged: no-work runs keep returning success and are never retried for this.
+	 *
+	 * @return bool
+	 */
+	public function didSendPurgeRequests(): bool {
+		return $this->sentPurgeRequests;
+	}
+
+	/**
+	 * Original targets the service hook or the post-hook policy removed from the last run, also after a failed run.
+	 * Purely informational: it never changes the run's boolean result or queue behavior.
+	 *
+	 * @return string[] Dropped original targets
+	 */
+	public function getDroppedTargets(): array {
+		return $this->droppedTargets;
 	}
 
 	/**

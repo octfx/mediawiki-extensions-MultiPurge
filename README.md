@@ -52,3 +52,5 @@ Only users with `editinterface` permissions can access this page.
 
 The page works by requesting the actual html output of a given title, and parsing all `load.php` calls.  
 All found links can then be selected to be purged.
+
+Image thumbnails and configured `$wgMultiPurgeStaticPurges` entries are also offered.

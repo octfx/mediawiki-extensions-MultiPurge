@@ -7,12 +7,13 @@
 	"multipurge-title-input": "Title to purge",
 	"multipurge-special-purge-success": "The purge request completed without errors",
 	"multipurge-special-purge-retry": "Not all services were purged; the failed ones were queued for retry",
+	"multipurge-special-purge-retry-mixed": "At least one failed service was queued for retry and at least one failed service could not be queued; see the MultiPurge log",
 	"multipurge-special-purge-partial": "Of the selected urls, $1 {{PLURAL:$1|url was|urls were}} valid and $2 {{PLURAL:$2|url was|urls were}} permanently rejected by the purge host policy and will not be purged or retried; see the MultiPurge log",
 	"multipurge-special-purge-rejected": "$1 {{PLURAL:$1|url was|urls were}} rejected by the purge host policy and will not be purged or retried; see the MultiPurge log",
 	"multipurge-special-no-services": "No purge service is enabled, so nothing was purged",
 	"multipurge-special-purge-error": "Error while purging urls",
-	"multipurge-special-no-urls":  "No urls selected",
-	"multipurge-styles-label":  "Select Styles to purge",
+	"multipurge-special-no-urls": "No urls selected",
+	"multipurge-styles-label": "Select Styles to purge",
 	"multipurge-scripts-label": "Select Scripts to purge",
 	"multipurge-thumbs-label": "Select Files to purge",
 	"multipurge-static-label": "Select configured assets to purge",
@@ -21,5 +22,9 @@
 	"multipurge-special-purge-submit": "Purge Selected Resources",
 	"multipurge-special-load-submit": "Load Resources",
 	"multipurge-special-invalid-title": "Title does not exist",
-	"purgeresources": "Purge Resources of a given title"
+	"purgeresources": "Purge Resources of a given title",
+	"multipurge-special-purge-unavailable": "The purge targets for this title could not be loaded, so nothing was purged",
+	"multipurge-special-purge-no-work": "$1 {{PLURAL:$1|enabled service sent|enabled services sent}} no purge request (service hook or purge policy), so not every selected url was necessarily purged; see the MultiPurge log",
+	"multipurge-special-purge-stale-selection": "The page no longer offers every group you selected from, so nothing was purged; load the resources again and reselect",
+	"multipurge-special-purge-omitted": "$1 {{PLURAL:$1|selected url was|selected urls were}} not sent by at least one enabled service (service hook or purge policy); another service may still have sent {{PLURAL:$1|it|them}}; see the MultiPurge log"
 }
