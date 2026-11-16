@@ -10,7 +10,6 @@ use JobQueueError;
 use JobQueueGroup;
 use JobQueueMemory;
 use LocalFile;
-use MediaWiki\Cache\HTMLCacheUpdater;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks;
@@ -27,6 +26,7 @@ use MockHttpTrait;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
 use RepoGroup;
+use Wikimedia\EventRelayer\EventRelayerGroup;
 use Wikimedia\Http\MultiHttpClient;
 
 /**
@@ -41,65 +41,41 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
-	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::buildSiteModuleUrl
-	 * @return void
-	 * @throws Exception
-	 */
-	public function testOnArticlePurge() {
-		$this->overrideConfigValues( [
-			'MultiPurgeRunInQueue' => true,
-			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
-		] );
-
-		$mockQueue = $this->getMockBuilder( JobQueueGroup::class )->disableOriginalConstructor()->getMock();
-		$mockQueue->expects( $this->once() )->method( 'push' );
-
-		$title = Title::newFromText( 'Foo' );
-		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
-
-		$cacheMock = $this->getMockBuilder( HTMLCacheUpdater::class )->disableOriginalConstructor()->getMock();
-		$cacheMock->expects( $this->once() )->method( 'getUrls' )->willReturn( [ 'http://localhost/foo' ] );
-
-		$hooks = new PurgeHooks(
-			$this->getServiceContainer()->getMainConfig(),
-			$cacheMock,
-			$mockQueue,
-			$this->getServiceContainer()->getResourceLoader(),
-			$this->getServiceContainer()->getUrlUtils(),
-		);
-
-		$hooks->onArticlePurge( $page );
-		DeferredUpdates::doUpdates();
-	}
-
-	/**
-	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks
-	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
-	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
-	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::buildSiteModuleUrl
 	 * @return void
 	 * @throws Exception
 	 */
 	public function testOnArticlePurgeFile() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
 		] );
 
-		$fileMock = $this->getMockBuilder( LocalFile::class )->disableOriginalConstructor()->getMock();
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'getThumbnails', 'getThumbUrl', 'getUrl' ] )
+			->getMock();
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturn( '/w/images/thumb/50px-Foo.jpg' );
+		$fileMock->method( 'getUrl' )->willReturn( '/w/images/Foo.jpg' );
+
 		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
 		$repoMock->method( 'findFile' )->willReturn( $fileMock );
-		$this->setMwGlobals( 'RepoGroup', $repoMock );
+		$this->setService( 'RepoGroup', $repoMock );
 
+		$captured = [];
 		$mockQueue = $this->getMockBuilder( JobQueueGroup::class )->disableOriginalConstructor()->getMock();
-		$mockQueue->expects( $this->once() )->method( 'push' );
+		$mockQueue->expects( $this->once() )->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( &$captured ): void {
+				$captured[] = $job->getParams()['urls'];
+			}
+		);
 
 		$title = Title::newFromText( 'Foo.jpg', NS_FILE );
 		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$this->getServiceContainer()->getHtmlCacheUpdater(),
 			$mockQueue,
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),
@@ -107,6 +83,8 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 
 		$hooks->onArticlePurge( $page );
 		DeferredUpdates::doUpdates();
+
+		$this->assertSame( [ [ 'https://example.org/w/images/Foo.jpg' ] ], $captured );
 	}
 
 	/**
@@ -139,7 +117,6 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$this->getServiceContainer()->getHtmlCacheUpdater(),
 			$mockQueue,
 			$rlMock,
 			$utilsMock,
@@ -205,17 +182,25 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 			$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
 		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
 
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'getThumbnails', 'getThumbUrl', 'getUrl' ] )
+			->getMock();
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturn( '/w/images/thumb/50px-Foo.jpg' );
+		$fileMock->method( 'getUrl' )->willReturn( 'https://example.org/foo' );
+
+		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
+		$repoMock->method( 'findFile' )->willReturn( $fileMock );
+		$this->setService( 'RepoGroup', $repoMock );
+
 		$group = $this->getServiceContainer()->getJobQueueGroup();
 
-		$cacheMock = $this->getMockBuilder( HTMLCacheUpdater::class )->disableOriginalConstructor()->getMock();
-		$cacheMock->method( 'getUrls' )->willReturn( [ 'https://example.org/foo' ] );
-
-		$title = Title::newFromText( 'Foo' );
+		$title = Title::newFromText( 'Foo.jpg', NS_FILE );
 		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$cacheMock,
 			$group,
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),
@@ -250,15 +235,15 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::linkThumbnails
-	 * @return void
+	 * @dataProvider provideFilePurgePaths
 	 */
-	public function testArticlePurgeFileKeepsProtocolRelativeThumbnailUrls() {
+	public function testArticlePurgeFilePreservesRepositoryUrls( string $fileUrl, string $expected ): void {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => true,
 			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
 			'Server' => 'https://wiki.example',
 			'MultiPurgeAllowedHosts' => [ 'static.example' ],
-			'UploadPath' => '/w/images',
+			'UploadPath' => 'https://static.example/uploads',
 		] );
 
 		$fileMock = $this->getMockBuilder( LocalFile::class )
@@ -270,7 +255,7 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 		$fileMock->method( 'getThumbUrl' )->willReturnCallback(
 			static fn ( string $name ): string => "//static.example/w/images/thumb/$name"
 		);
-		$fileMock->method( 'getUrl' )->willReturn( '/w/images/Foo.jpg' );
+		$fileMock->method( 'getUrl' )->willReturn( $fileUrl );
 
 		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
 		$repoMock->method( 'findFile' )->willReturn( $fileMock );
@@ -289,7 +274,6 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$this->getServiceContainer()->getHtmlCacheUpdater(),
 			$mockQueue,
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),
@@ -299,8 +283,15 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 		DeferredUpdates::doUpdates();
 
 		$this->assertSame( [
-			[ 'https://static.example/w/images/thumb/50px-Foo.jpg', 'https://wiki.example/w/images/Foo.jpg' ],
+			[ 'https://static.example/w/images/thumb/50px-Foo.jpg', $expected ],
 		], $captured );
+	}
+
+	public static function provideFilePurgePaths(): array {
+		return [
+			'root-relative URL belongs to the wiki' => [ '/w/images/Foo.jpg', 'https://wiki.example/w/images/Foo.jpg' ],
+			'bare path keeps the upload base' => [ 'images/Foo.jpg', 'https://static.example/uploads/images/Foo.jpg' ],
+		];
 	}
 
 	/**
@@ -363,7 +354,6 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$this->getServiceContainer()->getHtmlCacheUpdater(),
 			$mockQueue,
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),
@@ -423,7 +413,6 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$this->getServiceContainer()->getHtmlCacheUpdater(),
 			$mockQueue,
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),
@@ -459,20 +448,28 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 		] );
 		$this->getServiceContainer()->resetServiceForTesting( 'JobQueueGroupFactory' );
 
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'getThumbnails', 'getThumbUrl', 'getUrl' ] )
+			->getMock();
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturn( '/w/images/thumb/50px-Foo.jpg' );
+		$fileMock->method( 'getUrl' )->willReturn( 'https://example.org/foo' );
+
+		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
+		$repoMock->method( 'findFile' )->willReturn( $fileMock );
+		$this->setService( 'RepoGroup', $repoMock );
+
 		$logger = $this->createMock( LoggerInterface::class );
 		// Both services must be attempted: the first rejection must not end the loop.
 		$logger->expects( $this->exactly( 2 ) )->method( 'error' );
 		$this->setLogger( 'MultiPurge', $logger );
 
-		$cacheMock = $this->getMockBuilder( HTMLCacheUpdater::class )->disableOriginalConstructor()->getMock();
-		$cacheMock->method( 'getUrls' )->willReturn( [ 'https://example.org/foo' ] );
-
-		$title = Title::newFromText( 'Foo' );
+		$title = Title::newFromText( 'Foo.jpg', NS_FILE );
 		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
 
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$cacheMock,
 			$this->getServiceContainer()->getJobQueueGroupFactory()->makeJobQueueGroup(),
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),
@@ -481,6 +478,51 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 		// The rejected enqueues must not throw out of the hook.
 		$hooks->onArticlePurge( $page );
 		DeferredUpdates::doUpdates();
+	}
+
+	/**
+	 * An EventRelayerGroup without a usable entry cannot resolve any relayer, which must not
+	 * escape the hook as a new fatal; the hook falls back to direct title dispatch instead.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @return void
+	 */
+	public function testFallbackTitleDispatchWhenRelayerCannotBeResolved(): void {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+		] );
+		$this->getServiceContainer()->redefineService( 'EventRelayerGroup',
+			static fn () => new EventRelayerGroup( [] )
+		);
+
+		$captured = [];
+		$mockQueue = $this->getMockBuilder( JobQueueGroup::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$mockQueue->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( &$captured ): void {
+				$captured[] = $job->getParams()['urls'];
+			}
+		);
+
+		$title = Title::newFromText( 'RelayerResolutionFailurePage' );
+		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$mockQueue,
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+
+		$hooks->onArticlePurge( $page );
+		DeferredUpdates::doUpdates();
+
+		$this->assertSame( [
+			[ $title->getInternalURL(), $title->getInternalURL( 'action=history' ) ],
+		], $captured, 'The hook fell back to direct title dispatch without a fatal' );
 	}
 
 	/**
@@ -498,8 +540,26 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
 		] );
 
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [
+				'exists', 'getName', 'purgeCache', 'getHistory',
+				'getThumbnails', 'getThumbUrl', 'getUrl',
+			] )
+			->getMock();
+		$fileMock->method( 'exists' )->willReturn( true );
+		$fileMock->method( 'getName' )->willReturn( 'MultiPurgeOrderingTest.jpg' );
+		$fileMock->method( 'getHistory' )->willReturn( [] );
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturn( '/w/images/thumb/50px-Foo.jpg' );
+		$fileMock->method( 'getUrl' )->willReturn( '/w/images/Foo.jpg' );
+
+		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
+		$repoMock->method( 'findFile' )->willReturn( $fileMock );
+		$this->setService( 'RepoGroup', $repoMock );
+
 		$dbw = $this->getDb( DB_PRIMARY );
-		$created = $this->insertPage( 'MultiPurgeOrderingTest' );
+		$created = $this->insertPage( 'MultiPurgeOrderingTest.jpg', '', NS_FILE );
 		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $created['title'] );
 
 		// Backdate page_touched so the invalidation writes a clearly newer value.
@@ -523,12 +583,8 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 			}
 		);
 
-		$cacheMock = $this->getMockBuilder( HTMLCacheUpdater::class )->disableOriginalConstructor()->getMock();
-		$cacheMock->method( 'getUrls' )->willReturn( [ 'https://example.org/foo' ] );
-
 		$hooks = new PurgeHooks(
 			$this->getServiceContainer()->getMainConfig(),
-			$cacheMock,
 			$group,
 			$this->getServiceContainer()->getResourceLoader(),
 			$this->getServiceContainer()->getUrlUtils(),

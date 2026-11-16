@@ -6,12 +6,12 @@ namespace MediaWiki\Extension\MultiPurge\Hooks;
 
 use File;
 use JobQueueGroup;
-use MediaWiki\Cache\HtmlCacheUpdater;
 use MediaWiki\Config\Config;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
+use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
@@ -22,7 +22,6 @@ use MediaWiki\ResourceLoader\ResourceLoader;
 use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
 use MediaWiki\Utils\UrlUtils;
-use ReflectionException;
 use ReflectionObject;
 use Throwable;
 use WikiFilePage;
@@ -34,36 +33,29 @@ use WikiPage;
 class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 	private Config $config;
-	private HtmlCacheUpdater $cacheUpdater;
 	private JobQueueGroup $group;
 	private ResourceLoader $rl;
 	private UrlUtils $utils;
 
 	/**
 	 * @param Config $config
-	 * @param HtmlCacheUpdater $cacheUpdater
 	 * @param JobQueueGroup $group
 	 * @param ResourceLoader $rl
 	 * @param UrlUtils $utils
 	 */
 	public function __construct(
 		Config $config,
-		HtmlCacheUpdater $cacheUpdater,
 		JobQueueGroup $group,
 		ResourceLoader $rl,
 		UrlUtils $utils
 	) {
 		$this->config = $config;
-		$this->cacheUpdater = $cacheUpdater;
 		$this->group = $group;
 		$this->rl = $rl;
 		$this->utils = $utils;
 	}
 
 	/**
-	 * MW 1.46 renamed the HtmlCacheUpdater service to HTMLCacheUpdater and deprecated the old name,
-	 * which MW 1.43 still requires, so the service cannot be listed in extension.json
-	 *
 	 * @param Config $config
 	 * @param JobQueueGroup $group
 	 * @param ResourceLoader $rl
@@ -76,11 +68,7 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 		ResourceLoader $rl,
 		UrlUtils $utils
 	): self {
-		$cacheUpdater = MediaWikiServices::getInstance()->getService(
-			version_compare( MW_VERSION, '1.46', '<' ) ? 'HtmlCacheUpdater' : 'HTMLCacheUpdater'
-		);
-
-		return new self( $config, $cacheUpdater, $group, $rl, $utils );
+		return new self( $config, $group, $rl, $utils );
 	}
 
 	/**
@@ -88,23 +76,53 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 	 * @return void
 	 */
 	public function onArticlePurge( $wikiPage ): void {
-		if ( $wikiPage instanceof WikiFilePage && $wikiPage->getTitle()->getNamespace() === NS_FILE ) {
-			$files = $this->getThumbnails( $wikiPage->getFile() );
-			// Remove mwbackend link
-			array_shift( $files );
-			$urls = $this->linkThumbnails( $files, $wikiPage->getFile() );
-		} else {
-			$urls = $this->cacheUpdater->getUrls( $wikiPage->getTitle() );
+		// Listing thumbnails scans the file backend, so with no enabled service it must not run at all.
+		if ( !MultiPurgeJob::getServiceOrder() ) {
+			return;
 		}
 
+		$urls = [];
+
+		if ( $wikiPage instanceof WikiFilePage && $wikiPage->getTitle()->getNamespace() === NS_FILE ) {
+			$file = $wikiPage->getFile();
+			$files = $this->getThumbnails( $file );
+			// LocalFile puts the backend directory before the thumbnail names.
+			array_shift( $files );
+			$urls = $this->linkThumbnails( $files, $file );
+		} elseif ( !$this->coreRelaysTitleUrlsToMultiPurge() ) {
+			// Core only relays title urls to the cdn-url-purges owner, so a foreign owner needs this direct dispatch.
+			$urls = MediaWikiServices::getInstance()->getHtmlCacheUpdater()
+				->getUrls( $wikiPage->getTitle() );
+		}
+
+		// When the check above passed, core relays the title urls through this extension's relayer after this hook.
 		$this->buildSiteModuleUrl( $wikiPage->getTitle(), $urls );
 
 		$this->runPurge( $urls );
 	}
 
 	/**
+	 * Whether core relays title urls to this extension's cdn-url-purges relayer.
+	 * EventRelayerGroup snapshots its channel config when first built, so a stale group silently bypasses MultiPurge.
+	 * Asking the live service matches exactly what core later relays through.
+	 * A relayer that cannot be constructed also counts as not relaying.
+	 *
+	 * @return bool
+	 */
+	private function coreRelaysTitleUrlsToMultiPurge(): bool {
+		try {
+			$relayer = MediaWikiServices::getInstance()->getEventRelayerGroup()
+				->getRelayer( 'cdn-url-purges' );
+		} catch ( Throwable $e ) {
+			wfDebugLog( 'MultiPurge', 'Falling back to direct title purges: ' . $e->getMessage() );
+			return false;
+		}
+
+		return $relayer instanceof PurgeEventRelayer;
+	}
+
+	/**
 	 * This is only here to purge site styles
-	 * Every other url is handled through PurgeEventRelayer
 	 *
 	 * @see PurgeEventRelayer
 	 * @param EditPage $editpage_Obj
@@ -121,42 +139,13 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 		}
 	}
 
-	/**
-	 * Returns an array of thumbnail urls for this wiki file
-	 * File::getThumbnails() is protected, so it is called through reflection
-	 *
-	 * @param File|WikiFilePage $page
-	 * @return array
-	 */
-	private function getThumbnails( $page ): array {
-		if ( $page instanceof File ) {
-			$file = $page;
-		} else {
-			$file = $page->getFile();
-		}
-
-		if ( !method_exists( $file, 'getThumbnails' ) ) {
-			return [];
-		}
-
-		$refObject = new ReflectionObject( $file );
-		try {
-			$refMethod = $refObject->getMethod( 'getThumbnails' );
-		} catch ( ReflectionException ) {
-			return [];
-		}
-
-		try {
-			$thumbnails = $refMethod->invoke( $file );
-		} catch ( ReflectionException ) {
-			$thumbnails = [];
-		}
-
-		return $thumbnails;
+	private function getThumbnails( File $file ): array {
+		// Core has no public method for listing existing thumbnails.
+		return ( new ReflectionObject( $file ) )->getMethod( 'getThumbnails' )->invoke( $file );
 	}
 
 	/**
-	 * Links relative urls to absolute urls based on wgServer or wgUploadPath
+	 * Collects file targets while supporting repositories configured with bare paths.
 	 *
 	 * @param array $files
 	 * @param File $baseFile
@@ -171,37 +160,33 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 			$url = $uploadPath;
 		}
 
-		// Purge the CDN
 		$urls = [];
 		foreach ( $files as $thumb ) {
-			$urls[] = $this->absolutizeUrl( $url, $baseFile->getThumbUrl( $thumb ) );
+			$urls[] = $this->expandBareFilePath( $url, $baseFile->getThumbUrl( $thumb ) );
 		}
 
-		$urls[] = $this->absolutizeUrl( $url, $baseFile->getUrl() );
+		$urls[] = $this->expandBareFilePath( $url, $baseFile->getUrl() );
 
 		return $urls;
 	}
 
 	/**
-	 * Prefixes a path-relative url with the base, keeping absolute and protocol-relative urls untouched.
-	 * Any syntactically present scheme is kept so the policy can reject it; prefixing would fold it into a local path.
-	 * A leading-slash trim would likewise fold "//host/path" urls into the wiki host.
+	 * Core can return bare file paths, which the purge policy cannot resolve on its own.
+	 * Leave rooted and scheme-bearing URLs untouched so the policy can resolve or reject them.
 	 *
 	 * @param string $base
 	 * @param string $url
 	 * @return string
 	 */
-	private function absolutizeUrl( string $base, string $url ): string {
-		if ( preg_match( '/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $url ) || str_starts_with( $url, '//' ) ) {
+	private function expandBareFilePath( string $base, string $url ): string {
+		if ( str_starts_with( $url, '/' ) || preg_match( '/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $url ) ) {
 			return $url;
 		}
 
-		return sprintf( '%s/%s', $base, ltrim( $url, '/' ) );
+		return "$base/$url";
 	}
 
 	/**
-	 * Purges an array of urls
-	 *
 	 * @param array $urls
 	 */
 	private function runPurge( array $urls ): void {
