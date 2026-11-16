@@ -174,30 +174,29 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 		// Purge the CDN
 		$urls = [];
 		foreach ( $files as $thumb ) {
-			$thumbUrl = ltrim( $baseFile->getThumbUrl( $thumb ), '/' );
-			if ( isset( parse_url( $thumbUrl )['host'] ) ) {
-				$urls[] = $thumbUrl;
-			} else {
-				$urls[] = sprintf(
-					'%s/%s',
-					$url,
-					ltrim( $baseFile->getThumbUrl( $thumb ), '/' )
-				);
-			}
-
+			$urls[] = $this->absolutizeUrl( $url, $baseFile->getThumbUrl( $thumb ) );
 		}
 
-		if ( isset( parse_url( $baseFile->getUrl() )['host'] ) ) {
-			$urls[] = $baseFile->getUrl();
-		} else {
-			$urls[] = sprintf(
-				'%s/%s',
-				$url,
-				ltrim( $baseFile->getUrl(), '/' )
-			);
-		}
+		$urls[] = $this->absolutizeUrl( $url, $baseFile->getUrl() );
 
 		return $urls;
+	}
+
+	/**
+	 * Prefixes a path-relative url with the base, keeping absolute and protocol-relative urls untouched.
+	 * Any syntactically present scheme is kept so the policy can reject it; prefixing would fold it into a local path.
+	 * A leading-slash trim would likewise fold "//host/path" urls into the wiki host.
+	 *
+	 * @param string $base
+	 * @param string $url
+	 * @return string
+	 */
+	private function absolutizeUrl( string $base, string $url ): string {
+		if ( preg_match( '/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $url ) || str_starts_with( $url, '//' ) ) {
+			return $url;
+		}
+
+		return sprintf( '%s/%s', $base, ltrim( $url, '/' ) );
 	}
 
 	/**
@@ -206,19 +205,19 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 	 * @param array $urls
 	 */
 	private function runPurge( array $urls ): void {
-		$urls = array_unique( $urls );
-
 		if ( !$urls ) {
 			return;
 		}
 
 		wfDebugLog( 'MultiPurge', 'Running Job from PurgeHooks' );
 
+		$urls = MultiPurgeJob::filterDispatchUrls( $urls );
+		if ( !$urls ) {
+			return;
+		}
+
 		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
-			$job = new MultiPurgeJob( [
-				'urls' => array_unique( $urls ),
-				'service' => $service,
-			] );
+			$job = new MultiPurgeJob( [ 'urls' => $urls, 'service' => $service ] );
 
 			if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
 				$this->queueAfterInvalidation( $job, $service, 'Queueing the {service} purge was rejected: {error}' );

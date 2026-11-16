@@ -17,6 +17,7 @@ use MediaWiki\Http\HttpRequestFactory;
 use MediaWiki\JobQueue\JobQueueGroupFactory;
 use MediaWiki\MainConfigNames;
 use MediaWikiIntegrationTestCase;
+use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
 use Wikimedia\Http\MultiHttpClient;
 
@@ -69,12 +70,19 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 		DeferredUpdates::doUpdates();
 
 		$this->assertCount( 1, $purged );
-		$this->assertEqualsCanonicalizing( array_map( [ $file, 'getThumbUrl' ], $thumbnails ), $purged[0] );
+		$server = $this->getConfVar( MainConfigNames::Server );
+		$this->assertEqualsCanonicalizing(
+			array_map(
+				static fn ( string $thumbUrl ): string => $server . $thumbUrl,
+				array_map( [ $file, 'getThumbUrl' ], $thumbnails )
+			),
+			$purged[0],
+			'Queued job params carry the canonical absolute thumbnail URLs'
+		);
 	}
 
 	/**
-	 * An inline run has no queue retry of its own, so a failed service job must be
-	 * enqueued immediately for MediaWiki-managed retry instead of being lost.
+	 * An inline run has no queue retry of its own, so a failed service job must be enqueued immediately for retry.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
 	 * @dataProvider provideInlineFailureResponses
@@ -134,6 +142,7 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	public function testFailedServiceIsQueuedAloneWhileOthersSucceed() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Cloudflare::class, Varnish::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 			'MultiPurgeCloudFlareZoneId' => 'test-zone',
@@ -166,6 +175,7 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	public function testFailedServiceFirstStillDispatchesLaterServices() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Varnish::class, Cloudflare::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 			'MultiPurgeCloudFlareZoneId' => 'test-zone',
@@ -190,8 +200,8 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * A thrown service failure is a failed job too, and throwing first must not stop
-	 * the services configured after it.
+	 * A thrown service failure is a failed job too.
+	 * Throwing first must not stop the services configured after it.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
 	 * @return void
@@ -244,9 +254,8 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * In queue mode a rejected enqueue must not escape the relayer, hide the failure,
-	 * or stop the services configured after it. The read-only queue makes each real
-	 * immediate enqueue reject the job.
+	 * In queue mode a rejected enqueue must not escape the relayer, hide the failure, or stop later services.
+	 * The read-only queue makes each real immediate enqueue reject the job.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
 	 * @return void
@@ -254,6 +263,7 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	public function testQueuedRejectedEnqueueIsLoggedAndFailsTheRelay() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Varnish::class, Cloudflare::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 			'MultiPurgeCloudFlareZoneId' => 'test-zone',
@@ -276,8 +286,8 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	/**
 	 * A rejected enqueue for one queued service must not lose the services after it.
 	 *
-	 * Queued dispatch must enqueue immediately: lazyPush defers the enqueue past the
-	 * response in web mode, where a rejection can no longer reach this caller.
+	 * Queued dispatch must enqueue immediately: lazyPush defers the enqueue past the response in web mode.
+	 * A rejection could then no longer reach this caller.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
 	 * @return void
@@ -285,6 +295,7 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	public function testQueuedRejectedEnqueueStillDispatchesLaterServices() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Varnish::class, Cloudflare::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 			'MultiPurgeCloudFlareZoneId' => 'test-zone',
@@ -344,12 +355,211 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 		$this->assertNotNull( $job, 'The failed service was queued for retry' );
 	}
 
-	private function enableVarnishInline(): void {
+	/**
+	 * A failed enqueue logs the queue's exception, and a DB queue error embeds the serialized job parameters.
+	 * Rejected targets must never be in those parameters, or a credential-bearing rejected URL reaches the log.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::filterDispatchUrls
+	 * @return void
+	 */
+	public function testQueuePushFailureNeverSerializesRejectedUrls() {
 		$this->overrideConfigValues( [
-			'MultiPurgeRunInQueue' => false,
+			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Varnish::class, Cloudflare::class ],
+			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
+		] );
+
+		$captured = new ArrayObject();
+		$group = $this->getMockBuilder( JobQueueGroup::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'push' ] )
+			->getMock();
+		$group->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( $captured ): void {
+				$captured[] = $job;
+				// A DBQueryError carries the failing statement with the serialized params.
+				throw new JobQueueError(
+					'DBQueryError: INSERT INTO job (job_params) VALUES ('
+					. serialize( $job->getParams() ) . ')'
+				);
+			}
+		);
+		$factory = $this->createMock( JobQueueGroupFactory::class );
+		$factory->method( 'makeJobQueueGroup' )->willReturn( $group );
+		$this->getServiceContainer()->redefineService( 'JobQueueGroupFactory', static fn () => $factory );
+
+		$entries = $this->installLogSpy();
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertFalse(
+			$relayer->notifyMulti( 'cdn-url-purges', [
+				[ 'url' => 'https://example.org/ok' ],
+				[ 'url' => 'https://user:secret@evil.example/x' ],
+			] ),
+			'The failed enqueue still fails the notification'
+		);
+
+		$this->assertCount( 2, $captured, 'Both services received the valid target' );
+		foreach ( $captured as $job ) {
+			$this->assertSame( [ 'https://example.org/ok' ], $job->getParams()['urls'] );
+		}
+		foreach ( $entries as $entry ) {
+			$this->assertStringNotContainsString( 'secret', $entry, 'Rejected input never reaches the log' );
+		}
+		$this->assertCount( 1, array_filter(
+			$entries->getArrayCopy(),
+			static fn ( string $entry ): bool => str_starts_with( $entry, 'Purge target rejected by the host policy' )
+		), 'The rejected input is logged once, not once per service' );
+	}
+
+	/**
+	 * The inline fallback queues the failed service's job for retry, which must also be free of rejected targets.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::filterDispatchUrls
+	 * @return void
+	 */
+	public function testInlineRetryEnqueueNeverSerializesRejectedUrls() {
+		$this->enableVarnishInline();
+		$this->mockServiceResponses( [ 'varnish.internal' => 500 ] );
+
+		$captured = new ArrayObject();
+		$group = $this->getMockBuilder( JobQueueGroup::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'push' ] )
+			->getMock();
+		$group->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( $captured ): void {
+				$captured[] = $job;
+				throw new JobQueueError(
+					'DBQueryError: INSERT INTO job (job_params) VALUES ('
+					. serialize( $job->getParams() ) . ')'
+				);
+			}
+		);
+		$factory = $this->createMock( JobQueueGroupFactory::class );
+		$factory->method( 'makeJobQueueGroup' )->willReturn( $group );
+		$this->getServiceContainer()->redefineService( 'JobQueueGroupFactory', static fn () => $factory );
+
+		$entries = $this->installLogSpy();
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertFalse(
+			$relayer->notifyMulti( 'cdn-url-purges', [
+				[ 'url' => 'https://example.org/ok' ],
+				[ 'url' => 'https://user:secret@evil.example/x' ],
+			] ),
+			'The failed retry enqueue fails the notification'
+		);
+
+		$this->assertNotEmpty( $captured->getArrayCopy(), 'Only the failed service was queued' );
+		foreach ( $captured as $job ) {
+			$this->assertSame( [ 'https://example.org/ok' ], $job->getParams()['urls'] );
+		}
+		foreach ( $entries as $entry ) {
+			$this->assertStringNotContainsString( 'secret', $entry );
+		}
+	}
+
+	/**
+	 * When every target is rejected there is nothing to hand off: no empty job is enqueued and nothing is retried.
+	 * The secret-bearing rejected input never reaches job parameters or the log.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::filterDispatchUrls
+	 * @return void
+	 */
+	public function testAllRejectedUrlsAreNeverEnqueued() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Varnish::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 		] );
+
+		$captured = new ArrayObject();
+		$group = $this->getMockBuilder( JobQueueGroup::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'push' ] )
+			->getMock();
+		$group->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( $captured ): void {
+				$captured[] = $job;
+			}
+		);
+		$factory = $this->createMock( JobQueueGroupFactory::class );
+		$factory->method( 'makeJobQueueGroup' )->willReturn( $group );
+		$this->getServiceContainer()->redefineService( 'JobQueueGroupFactory', static fn () => $factory );
+
+		$entries = $this->installLogSpy();
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://user:secret@evil.example/x' ] ] ),
+			'The notification is processed; the rejection is permanent and final'
+		);
+
+		$this->assertSame( [], $captured->getArrayCopy(), 'No empty job is enqueued' );
+		foreach ( $entries as $entry ) {
+			$this->assertStringNotContainsString( 'secret', $entry );
+		}
+	}
+
+	private function enableVarnishInline(): void {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Varnish::class ],
+			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
+		] );
+	}
+
+	/**
+	 * Disallowed targets are filtered before any HTTP runs.
+	 * The valid targets of the same relay still get purged and reported as relayed.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testDisallowedUrlsAreFilteredBeforeDispatch() {
+		$this->enableVarnishInline();
+		$sent = $this->mockServiceResponses( [] );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue( $relayer->notifyMulti( 'cdn-url-purges', [
+			[ 'url' => 'https://example.org/ok' ],
+			[ 'url' => 'https://evil.example/bad' ],
+		] ) );
+
+		$this->assertCount( 1, $sent->getArrayCopy() );
+		$this->assertSame( 'http://varnish.internal/ok', $sent[0]['url'] );
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'Nothing needs a retry' );
+	}
+
+	/**
+	 * URLs a MultiPurgeOnPurgeUrls hook subscriber adds are validated too.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testOnPurgeUrlsHookAdditionsAreValidated() {
+		$this->enableVarnishInline();
+		$sent = $this->mockServiceResponses( [] );
+		$this->setTemporaryHook( 'MultiPurgeOnPurgeUrls',
+			static function ( array &$urls ): void {
+				$urls[] = 'https://evil.example/hook-added';
+			}
+		);
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue( $relayer->notifyMulti( 'cdn-url-purges', [
+			[ 'url' => 'https://example.org/ok' ],
+		] ) );
+
+		$this->assertCount( 1, $sent->getArrayCopy() );
+		$this->assertSame( 'http://varnish.internal/ok', $sent[0]['url'] );
 	}
 
 	/**
@@ -403,9 +613,8 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * Real factories whose queues reject pushes, so a rejected retry enqueue can be
-	 * exercised. The factory itself is rebuilt through core's service wiring, which
-	 * supplies the stats service matching the running MediaWiki version.
+	 * Real factories whose queues reject pushes, so a rejected retry enqueue can be exercised.
+	 * The factory itself is rebuilt through core's service wiring to match the running version.
 	 *
 	 * @return void
 	 */
@@ -414,5 +623,25 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 			'default' => [ 'class' => JobQueueMemory::class, 'readOnlyReason' => 'test queue read-only' ],
 		] );
 		$this->getServiceContainer()->resetServiceForTesting( 'JobQueueGroupFactory' );
+	}
+
+	/**
+	 * Replaces the MultiPurge channel with a spy that records every entry.
+	 * A test can then assert that no rejected input was logged at any level.
+	 *
+	 * @return ArrayObject Captured "message context" strings
+	 */
+	private function installLogSpy(): ArrayObject {
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+		return $entries;
 	}
 }

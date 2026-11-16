@@ -17,12 +17,17 @@ For a custom CDN purger:
 | `$wgMultiPurgeCloudFlareZoneId`        | null             | String - Zone ID the Wiki Domain is contained in                                                                                                        |
 | `$wgMultiPurgeCloudFlareApiToken`      | null             | String - API Token found in your dashboard                                                                                                              |
 | `$wgMultiPurgeVarnishServers`          | null             | String/Array - Array of URLs pointing to your Varnish Servers. Can be IPs                                                                               |
+| `$wgMultiPurgeAllowedHosts`            | `[]`             | Array - Additional first-party purge target hostnames, e.g. `[ 'static.example.org' ]` |
 | `$wgMultiPurgeEnabledServices`         | null             | Array - List of enabled services. Possible values are 'Cloudflare', 'Varnish'                                                                           |
 | `$wgMultiPurgeServiceOrder`            | null             | Array - List of service purge order. Possible values are 'Cloudflare', 'Varnish'. Example: ['Varnish', 'Cloudflare'] purges varnish, then cloudflare    |
 | `$wgMultiPurgeWarmParserCacheOnRefreshLinks` | false      | Bool - Keep pages re-rendered after a template edit in the parser cache. See below                                                                      |
 | `$wgMultiPurgeCloudFlareUrlsPerRequest` | 100             | Int - Maximum URLs in one Cloudflare purge request. Cloudflare allows 100 on the Free, Pro and Business plans and 500 on Enterprise                     |
 | `$wgMultiPurgeCloudFlareBaseUrl`       | `"https://api.cloudflare.com"` | String - The base URL of Cloudflare's API domain, or an internal service URL such as an egress gateway.                                   |
 
+
+## Upgrading
+
+Only the exact hostname of `$wgServer` is allowed by default. Add any other hostnames you control, such as upload or static asset hosts, to `$wgMultiPurgeAllowedHosts`. Use bare hostnames without a scheme, port, or path. Use punycode for internationalized hostnames in `$wgServer`, the allowlist, and purge URLs. Rejected targets are logged to the `MultiPurge` channel.
 
 ## Purge retries
 

@@ -6,6 +6,7 @@ namespace MediaWiki\Extension\MultiPurge\Specials;
 
 use MediaWiki\Config\ConfigException;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
+use MediaWiki\Extension\MultiPurge\PurgeUrlPolicy;
 use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
@@ -123,71 +124,107 @@ class SpecialPurgeResources extends SpecialPage {
 			return;
 		}
 
-		$server = MediaWikiServices::getInstance()->getMainConfig()->get( 'Server' );
-
-		$mapper = static function ( string $url ) use ( $server ) {
-			return html_entity_decode( sprintf( '%s/%s', $server, ltrim( $url, '/' ) ) );
-		};
-
-		$urls = array_filter( array_unique( array_merge(
-			array_map( $mapper, $formData['styles'] ?? [] ),
-			array_map( $mapper, $formData['scripts'] ?? [] ),
-			array_map( $mapper, $formData['thumbs'] ?? [] ),
-			array_map( $mapper, $formData['statics'] ?? [] ),
-		) ) );
-
-		wfDebugLog(
-			'MultiPurge',
-			sprintf( 'Purging urls from Special Page: %s', json_encode( $urls ) )
+		$services = MediaWikiServices::getInstance();
+		$policy = PurgeUrlPolicy::newFromConfigs(
+			$services->getMainConfig(),
+			$services->getConfigFactory()->makeConfig( 'MultiPurge' )
 		);
 
-		if ( $urls ) {
-			$group = MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup();
-			$queuedForRetry = false;
-			$retryLost = false;
+		$decode = static function ( string $url ): string {
+			// Form values come from parsed HTML, where & is entity-encoded.
+			$url = html_entity_decode( $url, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+			// Legacy static entries without a leading slash are root-relative.
+			if ( !str_starts_with( $url, '/' ) && !preg_match( '/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $url ) ) {
+				$url = '/' . $url;
+			}
+			return $url;
+		};
 
-			foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
-				$job = new MultiPurgeJob( [
-					'urls' => $urls,
-					'service' => $service,
-				] );
+		$selected = array_map( $decode, array_filter( array_merge(
+			$formData['styles'] ?? [],
+			$formData['scripts'] ?? [],
+			$formData['thumbs'] ?? [],
+			$formData['statics'] ?? [],
+		) ) );
 
-				try {
-					$status = $job->run();
-				} catch ( Throwable $e ) {
-					wfDebugLog( 'MultiPurge', sprintf( 'Job failed: %s', $e->getMessage() ) );
-					$status = false;
-				}
+		// One pass: valid targets are canonicalized and deduplicated, rejections are logged, counts come back.
+		$urls = $policy->resolveList( $selected, $rejectedCount );
 
-				if ( $status ) {
-					continue;
-				}
+		// This channel logs counts only; a target path or query can carry credentials.
+		// MediaWiki's HTTP client still logs the request URLs itself, as documented.
+		wfDebugLog(
+				'MultiPurge',
+				sprintf(
+					'Purging %d urls from the special page (%d rejected by the host policy)',
+					count( $urls ),
+					$rejectedCount
+				)
+		);
 
-				// An inline run gets no queue retry of its own, so queue just this failed service.
-				// Services that succeeded are not re-run.
-				try {
-					$group->push( $job );
-					$queuedForRetry = true;
-				} catch ( Throwable $e ) {
-					LoggerFactory::getInstance( 'MultiPurge' )->error(
-						'Purge by {service} failed and queueing a retry was rejected: {error}',
-						[ 'service' => $service, 'error' => $e->getMessage() ]
-					);
-					$retryLost = true;
-				}
+		if ( !$urls ) {
+			if ( $rejectedCount > 0 ) {
+				// Every selection was rejected, which is a different outcome from an empty selection.
+				return Status::newFatal( 'multipurge-special-purge-rejected', $rejectedCount );
+			}
+			return Status::newFatal( 'multipurge-special-no-urls' );
+		}
+
+		$serviceOrder = MultiPurgeJob::getServiceOrder();
+		$group = MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup();
+		$queuedForRetry = false;
+		$retryLost = false;
+
+		foreach ( $serviceOrder as $service ) {
+			$job = new MultiPurgeJob( [
+				'urls' => $urls,
+				'service' => $service,
+			] );
+
+			try {
+				$status = $job->run();
+			} catch ( Throwable $e ) {
+				wfDebugLog( 'MultiPurge', sprintf( 'Job failed: %s', $e->getMessage() ) );
+				$status = false;
 			}
 
-			if ( $retryLost ) {
-				return Status::newFatal( 'multipurge-special-purge-error' );
-			}
-			if ( $queuedForRetry ) {
-				return Status::newFatal( 'multipurge-special-purge-retry' );
+			if ( $status ) {
+				continue;
 			}
 
+			// An inline run gets no queue retry of its own, so queue just this failed service.
+			// Services that succeeded are not re-run.
+			try {
+				$group->push( $job );
+				$queuedForRetry = true;
+			} catch ( Throwable $e ) {
+				LoggerFactory::getInstance( 'MultiPurge' )->error(
+					'Purge by {service} failed and queueing a retry was rejected: {error}',
+					[ 'service' => $service, 'error' => $e->getMessage() ]
+				);
+				$retryLost = true;
+			}
+		}
+
+		if ( $retryLost ) {
+			$status = Status::newFatal( 'multipurge-special-purge-error' );
+		} elseif ( $queuedForRetry ) {
+			$status = Status::newFatal( 'multipurge-special-purge-retry' );
+		} elseif ( !$serviceOrder ) {
+			// Nothing ran, so neither success nor a purge count may be claimed.
+			$status = Status::newFatal( 'multipurge-special-no-services' );
+		} elseif ( $rejectedCount > 0 ) {
+			// Claiming plain success would pretend the rejected selections were purged too.
+			// A policy rejection is permanent, so nothing was queued for it.
+			return Status::newFatal( 'multipurge-special-purge-partial', count( $urls ), $rejectedCount );
+		} else {
 			return new Message( 'multipurge-special-purge-success' );
 		}
 
-		return Status::newFatal( 'multipurge-special-no-urls' );
+		if ( $rejectedCount > 0 ) {
+			// The permanent rejection stays visible next to the execution outcome above instead of being hidden by it.
+			$status->fatal( 'multipurge-special-purge-rejected', $rejectedCount );
+		}
+		return $status;
 	}
 
 	/**

@@ -41,11 +41,13 @@ class PurgeEventRelayer extends EventRelayer {
 		// A late insert failure, such as SQLite inside an open transaction, surfaces at commit instead.
 		$relayed = true;
 
+		$urls = MultiPurgeJob::filterDispatchUrls( $urls );
+		if ( !$urls ) {
+			return true;
+		}
+
 		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
-			$job = new MultiPurgeJob( [
-				'urls' => array_unique( $urls ),
-				'service' => $service,
-			] );
+			$job = new MultiPurgeJob( [ 'urls' => $urls, 'service' => $service ] );
 
 			if ( MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeRunInQueue' ) === true ) {
 				// The relayer hands off immediately; core orders this context after the invalidation.

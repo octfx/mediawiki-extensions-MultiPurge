@@ -6,6 +6,7 @@ namespace MediaWiki\Extension\MultiPurge\Tests\Hooks;
 
 use ArrayObject;
 use Exception;
+use JobQueueError;
 use JobQueueGroup;
 use JobQueueMemory;
 use LocalFile;
@@ -23,6 +24,7 @@ use MediaWiki\Title\Title;
 use MediaWiki\Utils\UrlUtils;
 use MediaWikiIntegrationTestCase;
 use MockHttpTrait;
+use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
 use RepoGroup;
 use Wikimedia\Http\MultiHttpClient;
@@ -165,9 +167,8 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * An inline run has no queue retry of its own, so a failed service job must be
-	 * enqueued immediately for MediaWiki-managed retry, alone and without stopping
-	 * the services configured after it.
+	 * An inline run has no queue retry of its own, so a failed service job must be enqueued immediately.
+	 * The enqueue covers only that service and does not stop the services configured after it.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
@@ -176,6 +177,7 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	public function testInlineFailureIsQueuedForRetryIndependently() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Varnish::class, Cloudflare::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 			'MultiPurgeCloudFlareZoneId' => 'test-zone',
@@ -244,9 +246,200 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * In queue mode a rejected enqueue must not escape the hook, hide the failure,
-	 * or stop the services configured after it. The read-only queue makes each real
-	 * immediate enqueue reject the job.
+	 * Protocol-relative thumbnail URLs keep their own authority instead of being folded into $wgServer.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::linkThumbnails
+	 * @return void
+	 */
+	public function testArticlePurgeFileKeepsProtocolRelativeThumbnailUrls() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => true,
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'Server' => 'https://wiki.example',
+			'MultiPurgeAllowedHosts' => [ 'static.example' ],
+			'UploadPath' => '/w/images',
+		] );
+
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'getThumbnails', 'getThumbUrl', 'getUrl' ] )
+			->getMock();
+		// Real getThumbnails returns the thumb directory first, which the hook shifts off.
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb', '50px-Foo.jpg' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturnCallback(
+			static fn ( string $name ): string => "//static.example/w/images/thumb/$name"
+		);
+		$fileMock->method( 'getUrl' )->willReturn( '/w/images/Foo.jpg' );
+
+		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
+		$repoMock->method( 'findFile' )->willReturn( $fileMock );
+		$this->setService( 'RepoGroup', $repoMock );
+
+		$captured = [];
+		$mockQueue = $this->getMockBuilder( JobQueueGroup::class )->disableOriginalConstructor()->getMock();
+		$mockQueue->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( &$captured ): void {
+				$captured[] = $job->getParams()['urls'];
+			}
+		);
+
+		$title = Title::newFromText( 'Foo.jpg', NS_FILE );
+		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getHtmlCacheUpdater(),
+			$mockQueue,
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+
+		$hooks->onArticlePurge( $page );
+		DeferredUpdates::doUpdates();
+
+		$this->assertSame( [
+			[ 'https://static.example/w/images/thumb/50px-Foo.jpg', 'https://wiki.example/w/images/Foo.jpg' ],
+		], $captured );
+	}
+
+	/**
+	 * A rejected thumbnail URL must never reach the job parameters the queue serializes.
+	 * A failed insert can echo them in the exception the hook logs.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::filterDispatchUrls
+	 * @return void
+	 */
+	public function testQueuedFilePurgeNeverSerializesRejectedUrls() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => true,
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'Server' => 'https://wiki.example',
+			'UploadPath' => '/w/images',
+		] );
+
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'getThumbnails', 'getThumbUrl', 'getUrl' ] )
+			->getMock();
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb', '50px-Foo.jpg' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturn( 'https://user:secret@evil.example/thumb' );
+		$fileMock->method( 'getUrl' )->willReturn( '/w/images/Foo.jpg' );
+
+		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
+		$repoMock->method( 'findFile' )->willReturn( $fileMock );
+		$this->setService( 'RepoGroup', $repoMock );
+
+		$captured = [];
+		$mockQueue = $this->getMockBuilder( JobQueueGroup::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'push' ] )
+			->getMock();
+		$mockQueue->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( &$captured ): void {
+				$captured[] = $job->getParams();
+				throw new JobQueueError(
+					'DBQueryError: INSERT INTO job (job_params) VALUES ('
+					. serialize( $job->getParams() ) . ')'
+				);
+			}
+		);
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$title = Title::newFromText( 'Foo.jpg', NS_FILE );
+		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getHtmlCacheUpdater(),
+			$mockQueue,
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+
+		$hooks->onArticlePurge( $page );
+		DeferredUpdates::doUpdates();
+
+		$this->assertNotEmpty( $captured, 'The valid target was still enqueued' );
+		foreach ( $captured as $params ) {
+			$this->assertSame( [ 'https://wiki.example/w/images/Foo.jpg' ], $params['urls'] );
+		}
+		foreach ( $entries as $entry ) {
+			$this->assertStringNotContainsString( 'secret', $entry, 'Rejected input never reaches the log' );
+		}
+	}
+
+	/**
+	 * A thumbnail URL with any syntactically present scheme must reach the policy unchanged.
+	 * Prefixing $wgServer would fold "javascript:..." into an allowed local path.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::linkThumbnails
+	 * @return void
+	 */
+	public function testArticlePurgeFileKeepsNonHierarchicalSchemeForPolicy() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => true,
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'Server' => 'https://wiki.example',
+			'UploadPath' => '/w/images',
+		] );
+
+		$fileMock = $this->getMockBuilder( LocalFile::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'getThumbnails', 'getThumbUrl', 'getUrl' ] )
+			->getMock();
+		// Real getThumbnails returns the thumb directory first, which the hook shifts off.
+		$fileMock->method( 'getThumbnails' )->willReturn( [ 'mwbackend://foo/thumb', '50px-Foo.jpg' ] );
+		$fileMock->method( 'getThumbUrl' )->willReturn( 'javascript:alert(1)' );
+		$fileMock->method( 'getUrl' )->willReturn( '/w/images/Foo.jpg' );
+
+		$repoMock = $this->getMockBuilder( RepoGroup::class )->disableOriginalConstructor()->getMock();
+		$repoMock->method( 'findFile' )->willReturn( $fileMock );
+		$this->setService( 'RepoGroup', $repoMock );
+
+		$captured = [];
+		$mockQueue = $this->getMockBuilder( JobQueueGroup::class )->disableOriginalConstructor()->getMock();
+		$mockQueue->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( &$captured ): void {
+				$captured[] = $job->getParams()['urls'];
+			}
+		);
+
+		$title = Title::newFromText( 'Foo.jpg', NS_FILE );
+		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getHtmlCacheUpdater(),
+			$mockQueue,
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+
+		$hooks->onArticlePurge( $page );
+		DeferredUpdates::doUpdates();
+
+		$this->assertSame( [
+			[ 'https://wiki.example/w/images/Foo.jpg' ],
+		], $captured, 'A non-HTTP scheme never reaches the queued job parameters' );
+	}
+
+	/**
+	 * In queue mode a rejected enqueue must not escape the hook, hide the failure, or stop later services.
+	 * The read-only queue makes each real immediate enqueue reject the job.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
@@ -255,6 +448,7 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	public function testQueuedRejectedEnqueueIsLoggedWithoutSuppressingLaterServices() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Varnish::class, Cloudflare::class ],
 			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
 			'MultiPurgeCloudFlareZoneId' => 'test-zone',
@@ -290,9 +484,8 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * Queued jobs must not become visible to workers before the page invalidation of
-	 * the purge that triggered them has committed. This test drives the real
-	 * WikiPage::doPurge() path, which calls ArticlePurge before updating page_touched.
+	 * Queued jobs must not become visible to workers before the page invalidation of the purge has committed.
+	 * This test drives the real WikiPage::doPurge() path, which calls ArticlePurge before updating page_touched.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
@@ -301,6 +494,7 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	public function testQueuedJobsAreEnqueuedAfterPageInvalidation() {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => true,
+			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
 		] );
 

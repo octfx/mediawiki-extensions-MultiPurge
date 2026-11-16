@@ -46,6 +46,9 @@ class MultiPurgeJobQueueTest extends MediaWikiIntegrationTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
+		// The jobs' urls point at example.org, which must be the allowed host.
+		$this->overrideConfigValues( [ MainConfigNames::Server => 'https://example.org' ] );
+
 		$services = $this->getServiceContainer();
 		$this->queue = JobQueue::factory( [
 			'class' => JobQueueDBSingle::class,

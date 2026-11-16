@@ -6,6 +6,7 @@ namespace MediaWiki\Extension\MultiPurge\Services;
 
 use JsonException;
 use MediaWiki\Config\Config;
+use MediaWiki\Extension\MultiPurge\PurgeUrlPolicy;
 use MediaWiki\MediaWikiServices;
 
 class Cloudflare implements PurgeServiceInterface {
@@ -45,13 +46,18 @@ class Cloudflare implements PurgeServiceInterface {
 			$urls = [ $urls ];
 		}
 
-		$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
+		$policy = PurgeUrlPolicy::newFromConfigs(
+			MediaWikiServices::getInstance()->getMainConfig(),
+			$this->extensionConfig
+		);
 
-		// Cloudflare only purges absolute urls, but core passes file urls relative to $wgServer
-		$urls = array_map( static function ( string $url ) use ( $urlUtils ) {
-			$url = $urlUtils->expand( $url, PROTO_HTTPS ) ?? $url;
+		// Resolve to absolute HTTP(S) URLs on allowed hosts before anything reaches HTTP.
+		$urls = $policy->resolveList( $urls );
 
-			if ( substr( $url, 0, 5 ) === 'http:' ) {
+		// Cloudflare only purges absolute urls; existing behavior sends http targets as https.
+		// Whether both schemes share a cache entry depends on the zone's cache key configuration.
+		$urls = array_map( static function ( string $url ): string {
+			if ( strncasecmp( $url, 'http:', 5 ) === 0 ) {
 				$url = sprintf( 'https:%s', substr( $url, 5 ) );
 			}
 
@@ -89,13 +95,11 @@ class Cloudflare implements PurgeServiceInterface {
 		$zoneId = $this->extensionConfig->get( 'MultiPurgeCloudFlareZoneId' );
 		$apiToken = $this->extensionConfig->get( 'MultiPurgeCloudFlareApiToken' );
 		$baseUrl = $this->extensionConfig->get( 'MultiPurgeCloudFlareBaseUrl' );
+		// This channel logs counts only; a target path or query can carry credentials.
+		// MediaWiki's HTTP client still logs the request URLs itself, as documented.
 		wfDebugLog(
 			'MultiPurge',
-			sprintf(
-				'Added %d files to Cloudflare request: %s',
-				count( $urls ),
-				json_encode( $urls, JSON_THROW_ON_ERROR )
-			)
+			sprintf( 'Added %d files to a Cloudflare request', count( $urls ) )
 		);
 
 		if ( $this->extensionConfig->get( 'MultiPurgeCloudFlareCacheByDeviceType' ) ) {

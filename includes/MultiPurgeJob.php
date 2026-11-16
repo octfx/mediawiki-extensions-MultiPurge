@@ -83,6 +83,20 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	}
 
 	/**
+	 * Filter before dispatch because failed enqueues can echo serialized job parameters.
+	 *
+	 * @param string[] $urls
+	 * @return string[]
+	 */
+	public static function filterDispatchUrls( array $urls ): array {
+		$services = MediaWikiServices::getInstance();
+		return PurgeUrlPolicy::newFromConfigs(
+			$services->getMainConfig(),
+			$services->getConfigFactory()->makeConfig( 'MultiPurge' )
+		)->resolveList( $urls );
+	}
+
+	/**
 	 * Run the purge job
 	 * If no service is explicitly set, the purge is run against all enabled services
 	 *
@@ -102,6 +116,12 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		$requests = [];
 
+		// Enforced here so every caller, including jobs queued earlier, filters with the policy in force at run time.
+		$policy = PurgeUrlPolicy::newFromConfigs(
+			MediaWikiServices::getInstance()->getMainConfig(),
+			$this->extensionConfig
+		);
+
 		foreach ( $enabled as $service ) {
 			$urls = $this->params['urls'];
 
@@ -114,6 +134,14 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			);
 
 			if ( !$run ) {
+				continue;
+			}
+
+			// Hook modifications are validated too.
+			// A rejected target is a permanent policy violation: it is logged and skipped, never retried or fatal here.
+			$urls = $policy->resolveList( $urls );
+
+			if ( !$urls ) {
 				continue;
 			}
 
@@ -130,14 +158,15 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		wfDebugLog( 'MultiPurge', sprintf( 'Calling %d purge urls', count( $requests ) ) );
 
 		try {
-			$statuses = $http->runMulti( $requests );
+			// An empty batch means every target was rejected or every service vetoed; nothing to send or fail on.
+			$statuses = $requests ? $http->runMulti( $requests ) : [];
 		} catch ( Exception $e ) {
 			wfLogWarning( sprintf( '[MultiPurge]: %s', $e->getMessage() ) );
 			return false;
 		}
 
 		$good = true;
-		foreach ( $statuses as $data ) {
+		foreach ( $statuses as $index => $data ) {
 			[ $code, , , $body, $error ] = $data['response'];
 			if ( $code >= 200 && $code <= 299 ) {
 				continue;
@@ -146,9 +175,11 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			// Any unsuccessful response, including 429, fails the job so the configured queue retries it.
 			// Queues without delayed-job support reject jobs that carry a custom release timestamp.
 			$status = $body ?? $error;
+			// The request is identified by position, never by URL.
+			// The response body or transport error is logged verbatim as a diagnostic and may echo the target.
 			wfDebugLog(
 				'MultiPurge',
-				sprintf( 'Result for request %s is: %s', $data['url'] ?? '<invalid>', $status )
+				sprintf( 'Result for request %d is: %s', $index + 1, $status )
 			);
 			$good = false;
 		}
