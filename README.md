@@ -29,6 +29,8 @@ For a custom CDN purger:
 
 Only the exact hostname of `$wgServer` is allowed by default. Add any other hostnames you control, such as upload or static asset hosts, to `$wgMultiPurgeAllowedHosts`. Use bare hostnames without a scheme, port, or path. Use punycode for internationalized hostnames in `$wgServer`, the allowlist, and purge URLs. Rejected targets are logged to the `MultiPurge` channel.
 
+MultiPurge replaces the `cdn-url-purges` relayer and warns if it displaces a custom relayer at setup. The two relayers do not run together.
+
 ## Purge retries
 
 Run MediaWiki job workers even if purges run inline. MediaWiki controls retries.
