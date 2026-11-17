@@ -13,6 +13,7 @@ use LocalFile;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks;
+use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
 use MediaWiki\Http\HttpRequestFactory;
@@ -228,6 +229,310 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 		$this->assertCount( 1, $jobs, 'Only the failed service was queued for retry' );
 		$this->assertSame( Varnish::class, $jobs[0]->getParams()['service'] );
 		$this->assertSame( [ 'https://example.org/foo' ], $jobs[0]->getParams()['urls'] );
+	}
+
+	/**
+	 * A mixed configuration dispatches the valid service while the invalid name is skipped and logged.
+	 * Only a run that actually submitted requests may be logged as a success.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
+	 * @return void
+	 */
+	public function testInlineInvalidServiceDoesNotSuppressValidServiceOrClaimSuccess() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ 'NoSuchService', Varnish::class ],
+			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
+		] );
+		$this->redefineEventRelayerGroupToFallback();
+
+		$sent = new ArrayObject();
+		$multiMock = $this->getMockBuilder( MultiHttpClient::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$multiMock->method( 'runMulti' )->willReturnCallback(
+			static function ( array $requests ) use ( $sent ) {
+				foreach ( $requests as $i => $request ) {
+					$sent->append( $request );
+					$request['response'] = [ 200, null, [], null, null ];
+					$requests[$i] = $request;
+				}
+				return $requests;
+			}
+		);
+		$httpMock = $this->getMockBuilder( HttpRequestFactory::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
+		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getJobQueueGroup(),
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+		$title = Title::newFromText( 'MixedInvalidServicePage' );
+		$hooks->onArticlePurge(
+			$this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title )
+		);
+		DeferredUpdates::doUpdates();
+
+		$this->assertNotEmpty(
+			array_filter(
+					$sent->getArrayCopy(),
+					static fn ( array $request ): bool => str_contains( $request['url'], 'varnish.internal' )
+				),
+				'The valid service was dispatched despite the invalid name before it'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString(
+			'"service":"NoSuchService"',
+			$log,
+			'The invalid service name is logged at warning level'
+		);
+		$this->assertSame(
+			1,
+			substr_count( $log, 'Job Status: success' ),
+			'Only the run that sent requests may be logged as a success'
+		);
+		$this->assertStringContainsString(
+			'Job Status: sent no purge requests',
+			$log,
+			'The skipped service is logged as having sent nothing'
+		);
+
+		$queue = $this->getServiceContainer()->getJobQueueGroup()->get( 'MultiPurgePages' );
+		$this->assertFalse( $queue->pop(), 'No retry was queued for the invalid service' );
+	}
+
+	/**
+	 * With every configured service unknown an inline hook purge sends nothing and queues nothing, permanently.
+	 * No service run may be logged as a success, and the lost purge must surface at error level like other lost purges.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
+	 * @return void
+	 */
+	public function testInlineAllInvalidServicesDoNotClaimSuccess() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ 'NoSuchService', 'AlsoNoService' ],
+		] );
+		$this->redefineEventRelayerGroupToFallback();
+
+		$sent = new ArrayObject();
+		$multiMock = $this->getMockBuilder( MultiHttpClient::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$multiMock->method( 'runMulti' )->willReturnCallback(
+			static function ( array $requests ) use ( $sent ) {
+				foreach ( $requests as $i => $request ) {
+					$sent->append( $request );
+					$request['response'] = [ 200, null, [], null, null ];
+					$requests[$i] = $request;
+				}
+				return $requests;
+			}
+		);
+		$httpMock = $this->getMockBuilder( HttpRequestFactory::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
+		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getJobQueueGroup(),
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+		$title = Title::newFromText( 'AllInvalidServicesPage' );
+		$hooks->onArticlePurge(
+			$this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title )
+		);
+		DeferredUpdates::doUpdates();
+
+		$this->assertSame( [], $sent->getArrayCopy(), 'Nothing was sent' );
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertSame(
+			0,
+			substr_count( $log, 'Job Status: success' ),
+			'No service run may be logged as a success when nothing was purged'
+		);
+		$this->assertStringContainsString(
+			'error|No purge service could run',
+			$log,
+			'The lost purge is observable at error level'
+		);
+		$this->assertStringContainsString( '"service":"NoSuchService"', $log );
+		$this->assertStringContainsString( '"service":"AlsoNoService"', $log );
+
+		$queue = $this->getServiceContainer()->getJobQueueGroup()->get( 'MultiPurgePages' );
+		$this->assertFalse( $queue->pop(), 'No permanent retry was queued' );
+	}
+
+	/**
+	 * Enabled services whose order intersects to nothing can never purge, because the typo is dropped silently.
+	 * The hook must make that lost purge observable instead of quietly doing nothing.
+	 * An intentionally disabled extension logs nothing.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
+	 * @return void
+	 */
+	public function testInlineEmptyServiceIntersectionIsObservable() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Varnish::class ],
+			'MultiPurgeServiceOrder' => [ 'Varis' ],
+		] );
+		$this->redefineEventRelayerGroupToFallback();
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getJobQueueGroup(),
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+		$title = Title::newFromText( 'EmptyIntersectionPage' );
+		$hooks->onArticlePurge(
+			$this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title )
+		);
+		DeferredUpdates::doUpdates();
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString(
+			'Unknown purge service',
+			$log,
+			'The order typo is named in a warning'
+		);
+		$this->assertStringContainsString( '"service":"Varis"', $log );
+		$this->assertStringContainsString(
+			'error|No purge service could run',
+			$log,
+			'The lost purge is observable at error level'
+		);
+		// The log context is JSON-encoded, so the class string's backslashes are doubled there.
+		$this->assertStringContainsString( addslashes( Varnish::class ), $log,
+			'The enabled service that never ran is named' );
+		$this->assertSame( 0, substr_count( $log, 'Job Status: success' ), 'No success is claimed' );
+
+		$queue = $this->getServiceContainer()->getJobQueueGroup()->get( 'MultiPurgePages' );
+		$this->assertFalse( $queue->pop(), 'Nothing was queued' );
+	}
+
+	/**
+	 * A valid service that fails next to an invalid one keeps its retry handoff.
+	 * The run must not be reported as a lost purge, because a retry was scheduled.
+	 * The misconfiguration is already warned about by name.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
+	 * @return void
+	 */
+	public function testInlineInvalidPlusFailedValidServiceIsNotALostPurge() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ 'NoSuchService', Varnish::class ],
+			'MultiPurgeVarnishServers' => [ 'varnish.internal' ],
+		] );
+		$this->redefineEventRelayerGroupToFallback();
+
+		$multiMock = $this->getMockBuilder( MultiHttpClient::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$multiMock->method( 'runMulti' )->willReturnCallback(
+			static function ( array $requests ) {
+				foreach ( $requests as $i => $request ) {
+					$request['response'] = [ 500, null, [], null, null ];
+					$requests[$i] = $request;
+				}
+				return $requests;
+			}
+		);
+		$httpMock = $this->getMockBuilder( HttpRequestFactory::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
+		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getJobQueueGroup(),
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+		$title = Title::newFromText( 'InvalidPlusFailedPage' );
+		$hooks->onArticlePurge(
+			$this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title )
+		);
+		DeferredUpdates::doUpdates();
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString( '"service":"NoSuchService"', $log,
+			'The invalid name is warned about' );
+		$this->assertStringContainsString( 'Job Status: error, retry scheduled', $log );
+		$this->assertSame(
+			0,
+			substr_count( $log, 'No purge service could run' ),
+			'A queued retry means the purge is not lost, so no lost-purge error may be logged'
+		);
+
+		$queue = $this->getServiceContainer()->getJobQueueGroup()->get( 'MultiPurgePages' );
+		$retry = $queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $retry, 'The failed valid service was queued for retry' );
+		$this->assertSame( Varnish::class, $retry->getParams()['service'] );
 	}
 
 	/**
@@ -461,7 +766,6 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 		$this->setService( 'RepoGroup', $repoMock );
 
 		$logger = $this->createMock( LoggerInterface::class );
-		// Both services must be attempted: the first rejection must not end the loop.
 		$logger->expects( $this->exactly( 2 ) )->method( 'error' );
 		$this->setLogger( 'MultiPurge', $logger );
 
@@ -475,7 +779,6 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 			$this->getServiceContainer()->getUrlUtils(),
 		);
 
-		// The rejected enqueues must not throw out of the hook.
 		$hooks->onArticlePurge( $page );
 		DeferredUpdates::doUpdates();
 	}
@@ -612,6 +915,17 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 				$pushed[0],
 				'The job was enqueued after the page invalidation committed'
 			);
+	}
+
+	/**
+	 * Points the relayer group at MediaWiki's stock no-op relayer, so the hook takes its title-dispatch fallback.
+	 *
+	 * @return void
+	 */
+	private function redefineEventRelayerGroupToFallback(): void {
+		$this->getServiceContainer()->redefineService( 'EventRelayerGroup',
+			static fn () => new EventRelayerGroup( [] )
+		);
 	}
 
 }

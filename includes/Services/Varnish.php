@@ -93,13 +93,10 @@ class Varnish implements StreamingPurgeService {
 					}
 				}
 
-				$requestUrl = $this->buildUrl( $components );
-
+				// MultiHttpClient ignores timeouts set in individual request maps.
 				yield [
 					'method' => 'PURGE',
-					'url' => $requestUrl,
-					'timeout' => 30,
-					'connectTimeout' => 30,
+					'url' => $this->buildUrl( $components ),
 					'headers' => [
 						'Host' => $hostHeader,
 						'Connection' => 'Keep-Alive',

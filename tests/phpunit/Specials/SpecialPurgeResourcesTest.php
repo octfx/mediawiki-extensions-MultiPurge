@@ -1350,6 +1350,119 @@ class SpecialPurgeResourcesTest extends SpecialPageTestBase {
 	}
 
 	/**
+	 * An all-invalid configuration purges nothing and queues nothing, permanently.
+	 * The submission must report idle services instead of claiming purges, and the misconfiguration is logged per name.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Specials\SpecialPurgeResources::trySubmit
+	 * @return void
+	 */
+	public function testSubmitWithAllInvalidServicesDoesNotClaimPurges() {
+		$this->overrideConfigValues( [
+			'Server' => 'https://wiki.example',
+			'MultiPurgeEnabledServices' => [ 'NoSuchService', 'AlsoNoService' ],
+		] );
+		$sent = $this->mockServiceResponses( [] );
+
+		$logger = $this->createMock( LoggerInterface::class );
+		// Every unknown name produces one getServiceOrder warning and one job warning.
+		$logger->expects( $this->exactly( 4 ) )->method( 'warning' );
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$result = SpecialPurgeResources::trySubmit(
+			$this->purgeFormData(),
+			$this->createMock( OOUIHTMLForm::class )
+		);
+
+		$this->assertInstanceOf( Status::class, $result );
+		$this->assertStatusNotOK( $result );
+		$this->assertSame( 'multipurge-special-purge-no-work',
+			$result->getErrorsByType( 'error' )[0]['message'] );
+		$this->assertSame( [ 2 ], $result->getErrorsByType( 'error' )[0]['params'] );
+		$this->assertSame( [], $sent->getArrayCopy(), 'Nothing was sent' );
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'No permanent retry was queued' );
+	}
+
+	/**
+	 * Enabled services whose order intersects to nothing can never purge.
+	 * The submission reports that no service is selected instead of claiming success.
+	 * The order typo is warned about.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Specials\SpecialPurgeResources::trySubmit
+	 * @return void
+	 */
+	public function testSubmitWithEmptyServiceIntersectionReportsNoServices() {
+		$this->overrideConfigValues( [
+			'Server' => 'https://wiki.example',
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'MultiPurgeServiceOrder' => [ 'Typo' ],
+		] );
+		$sent = $this->mockServiceResponses( [] );
+
+		$logger = $this->createMock( LoggerInterface::class );
+		$logger->expects( $this->once() )->method( 'warning' )->with(
+			$this->stringContains( 'Unknown purge service' ),
+			$this->callback( static fn ( array $context ): bool =>
+				( $context['service'] ?? null ) === 'Typo'
+				&& ( $context['setting'] ?? null ) === 'MultiPurgeServiceOrder' )
+		);
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$result = SpecialPurgeResources::trySubmit(
+			$this->purgeFormData(),
+			$this->createMock( OOUIHTMLForm::class )
+		);
+
+		$this->assertInstanceOf( Status::class, $result );
+		$this->assertStatusNotOK( $result );
+		$this->assertSame(
+			'multipurge-special-no-services',
+			$result->getErrorsByType( 'error' )[0]['message']
+		);
+		$this->assertSame( [], $sent->getArrayCopy(), 'Nothing was sent' );
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'Nothing was queued' );
+	}
+
+	/**
+	 * A mixed configuration still dispatches the valid service.
+	 * The submission discloses that the invalid service sent nothing instead of claiming every service purged.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Specials\SpecialPurgeResources::trySubmit
+	 * @return void
+	 */
+	public function testSubmitWithMixedValidAndInvalidServicesReportsIdleServices() {
+		$this->overrideConfigValues( [
+			'Server' => 'https://wiki.example',
+			'MultiPurgeEnabledServices' => [ 'NoSuchService', Cloudflare::class ],
+			'MultiPurgeCloudFlareZoneId' => 'test-zone',
+			'MultiPurgeCloudFlareApiToken' => 'test-token',
+		] );
+		$sent = $this->mockServiceResponses( [] );
+
+		$logger = $this->createMock( LoggerInterface::class );
+		// The invalid name produces one getServiceOrder warning and one job warning.
+		$logger->expects( $this->exactly( 2 ) )->method( 'warning' );
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$result = SpecialPurgeResources::trySubmit(
+			$this->purgeFormData(),
+			$this->createMock( OOUIHTMLForm::class )
+		);
+
+		$this->assertInstanceOf( Status::class, $result );
+		$this->assertStatusNotOK( $result );
+		$this->assertSame( 'multipurge-special-purge-no-work',
+			$result->getErrorsByType( 'error' )[0]['message'] );
+		$this->assertSame( [ 1 ], $result->getErrorsByType( 'error' )[0]['params'] );
+		$this->assertCount( 1, $sent->getArrayCopy(), 'The valid service was dispatched' );
+		$this->assertStringContainsString(
+			'cloudflare',
+			$sent[0]['url'],
+			'The dispatched request went to the valid service'
+		);
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'Nothing needed a retry' );
+	}
+
+	/**
 	 * A vetoed service stays unqueued while a failed one is queued, and both facts are shown.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Specials\SpecialPurgeResources::trySubmit

@@ -379,6 +379,21 @@ class VarnishTest extends \MediaWikiIntegrationTestCase {
 	}
 
 	/**
+	 * MultiHttpClient reads timeout options at the client or runMulti() level, never from a request map.
+	 * A timeout key here is dead configuration that suggests a per-request limit that does not exist.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Services\Varnish::getPurgeRequest
+	 */
+	public function testRequestMapsCarryNoTimeoutOptions() {
+		$varnish = new Varnish( $this->getServiceContainer()->getMainConfig() );
+
+		$requests = $varnish->getPurgeRequest( [ 'https://foo.example/wiki/Page' ] );
+
+		$this->assertCount( 1, $requests );
+		$this->assertSame( [ 'method', 'url', 'headers' ], array_keys( $requests[0] ) );
+	}
+
+	/**
 	 * The request URL carries the untrusted target path, so this channel logs the validated Host header and counts.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Services\Varnish::getPurgeRequest

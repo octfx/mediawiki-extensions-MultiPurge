@@ -35,18 +35,42 @@ class PurgeEventRelayer extends EventRelayer {
 			return true;
 		}
 
+		if ( !$urls ) {
+			// An empty post-hook URL list leaves no purge to lose, so the service selection is not evaluated.
+			// A nonempty list against an unusable selection still errors below.
+			return true;
+		}
+
 		wfDebugLog( 'MultiPurge', 'Running Job' );
 
-		// The relayer reports the synchronous handoff to the queue, not the purge outcome.
-		// A late insert failure, such as SQLite inside an open transaction, surfaces at commit instead.
-		$relayed = true;
+		$serviceOrder = MultiPurgeJob::getServiceOrder();
+		if ( !$serviceOrder ) {
+			// Enabled services that select no usable service can never purge and are reported as lost purges.
+			// An intentionally disabled extension stays silent.
+			$enabled = MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeEnabledServices' );
+			if ( $enabled ) {
+				LoggerFactory::getInstance( 'MultiPurge' )->error(
+					'No purge service could run; nothing was purged or queued for: {services}',
+					[ 'services' => implode( ', ', $enabled ) ]
+				);
+				return false;
+			}
+			return true;
+		}
 
 		$urls = MultiPurgeJob::filterDispatchUrls( $urls );
 		if ( !$urls ) {
 			return true;
 		}
 
-		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
+		// In queue mode the relayer reports the synchronous handoff, not the purge outcome.
+		// Inline it runs the purges itself, so a notification that lost every purge is reported as a failure below.
+		// A late insert failure, such as SQLite inside an open transaction, surfaces at commit instead.
+		$relayed = true;
+		$validServiceRan = false;
+		$invalidServices = [];
+
+		foreach ( $serviceOrder as $service ) {
 			$job = new MultiPurgeJob( [ 'urls' => $urls, 'service' => $service ] );
 
 			if ( MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeRunInQueue' ) === true ) {
@@ -68,8 +92,18 @@ class PurgeEventRelayer extends EventRelayer {
 					$status = false;
 				}
 
+				$jobInvalidServices = $job->getInvalidServices();
+				$invalidServices = array_merge( $invalidServices, $jobInvalidServices );
+				// A failed or thrown run dispatched a usable service; a success counts unless it skipped its service.
+				$validServiceRan = $validServiceRan || ( $status ? $jobInvalidServices === [] : true );
+
 				if ( $status ) {
-					wfDebugLog( 'MultiPurge', 'Job Status: success' );
+					// A returning success may have sent nothing through a veto, an empty batch, or an unusable service.
+					// Logging plain success would claim a purge that did not happen.
+					wfDebugLog( 'MultiPurge', $job->didSendPurgeRequests()
+						? 'Job Status: success'
+						: 'Job Status: sent no purge requests'
+					);
 					continue;
 				}
 
@@ -86,6 +120,18 @@ class PurgeEventRelayer extends EventRelayer {
 					$relayed = false;
 				}
 			}
+		}
+
+		// An inline notification where every dispatched service was unusable purged and queued nothing, permanently.
+		// It must not claim success, and MediaWiki discards the relayer result.
+		// The lost purge is therefore logged at error level as the operative signal.
+		// A valid service that failed keeps its retry handoff and is never reported as an all-unusable run.
+		if ( $relayed && $invalidServices !== [] && !$validServiceRan ) {
+			LoggerFactory::getInstance( 'MultiPurge' )->error(
+					'No purge service could run; nothing was purged or queued for: {services}',
+					[ 'services' => implode( ', ', $invalidServices ) ]
+				);
+				$relayed = false;
 		}
 
 		return $relayed;

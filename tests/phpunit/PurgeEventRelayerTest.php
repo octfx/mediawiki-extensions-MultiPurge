@@ -10,6 +10,7 @@ use JobQueueGroup;
 use JobQueueMemory;
 use MediaWiki\Cache\HTMLCacheUpdater;
 use MediaWiki\Deferred\DeferredUpdates;
+use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Extension\MultiPurge\PurgeEventRelayer;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
@@ -19,6 +20,7 @@ use MediaWiki\MainConfigNames;
 use MediaWikiIntegrationTestCase;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use Wikimedia\Http\MultiHttpClient;
 
 /**
@@ -210,7 +212,14 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 		$this->enableVarnishInline();
 		$this->overrideConfigValue(
 			'MultiPurgeEnabledServices',
-			[ 'NoSuchService', Varnish::class ]
+			[ Cloudflare::class, Varnish::class ]
+		);
+		$this->setTemporaryHook( 'MultiPurgeOnPurgeService',
+			static function ( $service, array &$urls ): void {
+				if ( $service === Cloudflare::class ) {
+					throw new RuntimeException( 'service exploded' );
+				}
+			}
 		);
 		$sent = $this->mockServiceResponses( [] );
 
@@ -227,7 +236,356 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 
 		$jobs = $this->popQueuedMultiPurgeJobs();
 		$this->assertCount( 1, $jobs, 'Only the throwing service was queued for retry' );
-		$this->assertSame( 'NoSuchService', $jobs[0]->getParams()['service'] );
+		$this->assertSame( Cloudflare::class, $jobs[0]->getParams()['service'] );
+	}
+
+	/**
+	 * An unknown service name is permanent misconfiguration, not a purge failure.
+	 * The relayer must not queue a retry that can only fail again, while the valid service still dispatches.
+	 * The misconfiguration stays observable in the log.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testUnknownServiceNameIsSkippedWithoutQueueingARetry() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue(
+			'MultiPurgeEnabledServices',
+			[ 'NoSuchService', Varnish::class ]
+		);
+		$sent = $this->mockServiceResponses( [] );
+
+		$logger = $this->createMock( LoggerInterface::class );
+		// The name produces one warning from getServiceOrder and one from the job that skipped it.
+		$logger->expects( $this->exactly( 2 ) )->method( 'warning' )->with(
+			$this->anything(),
+			$this->callback( static fn ( array $context ): bool =>
+				( $context['service'] ?? null ) === 'NoSuchService' )
+		);
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'The misconfiguration itself must not fail the notification'
+		);
+
+		$this->assertNotEmpty(
+			array_filter(
+				$sent->getArrayCopy(),
+				static fn ( array $request ): bool => str_contains( $request['url'], 'varnish.internal' )
+			),
+			'The valid service was dispatched'
+		);
+
+		$this->assertSame(
+			[],
+			$this->popQueuedMultiPurgeJobs(),
+			'No retry was queued for the unknown service'
+		);
+	}
+
+	/**
+	 * An all-invalid configuration inline purges nothing and queues nothing, permanently.
+	 * The notification must report that failure instead of success, and the lost purge must surface at error level.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testAllInvalidServicesFailTheNotificationWithoutClaimingSuccess() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue(
+			'MultiPurgeEnabledServices',
+			[ 'NoSuchService', 'AlsoNoService' ]
+		);
+		$sent = $this->mockServiceResponses( [] );
+
+		$logger = $this->createMock( LoggerInterface::class );
+		// Every unknown name produces one getServiceOrder warning and one job warning.
+		$logger->expects( $this->exactly( 4 ) )->method( 'warning' );
+		$logger->expects( $this->once() )->method( 'error' )->with(
+			$this->stringContains( 'No purge service could run' ),
+			$this->callback( static fn ( array $context ): bool =>
+				( $context['services'] ?? null ) === 'NoSuchService, AlsoNoService' )
+		);
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertFalse(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'An all-invalid configuration must not claim a successful purge notification'
+		);
+
+		$this->assertSame( [], $sent->getArrayCopy(), 'Nothing was sent' );
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'No permanent retry was queued' );
+	}
+
+	/**
+	 * Enabled services whose order intersects to nothing can never purge.
+	 * The notification must report the failure instead of success, the typo must be named, and nothing may be queued.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testEmptyServiceIntersectionFailsNotification() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue( 'MultiPurgeServiceOrder', [ 'Varis' ] );
+		$sent = $this->mockServiceResponses( [] );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertFalse(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'A configuration that can never purge must not claim a successful notification'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString( 'Unknown purge service', $log );
+		$this->assertStringContainsString( '"service":"Varis"', $log );
+		$this->assertStringContainsString( 'error|No purge service could run', $log );
+		// The log context is JSON-encoded, so the class string's backslashes are doubled there.
+		$this->assertStringContainsString( addslashes( Varnish::class ), $log,
+			'The enabled service that never ran is named' );
+
+		$this->assertSame( [], $sent->getArrayCopy(), 'Nothing was sent' );
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'Nothing was queued' );
+	}
+
+	/**
+	 * A valid service failing next to an invalid one is handed to the queue for retry.
+	 * The handoff succeeded, so the relayer must report success and must not claim a lost purge.
+	 * The invalid name keeps its own warning.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testInvalidPlusFailedValidWithQueuedRetryKeepsHandoffSuccess() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue( 'MultiPurgeEnabledServices', [ 'NoSuchService', Varnish::class ] );
+		$sent = $this->mockServiceResponses( [ 'varnish.internal' => 500 ] );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'The successful retry handoff must not be reported as a failed notification'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString( '"service":"NoSuchService"', $log );
+		$this->assertStringContainsString( 'Job Status: error, queued for retry', $log );
+		$this->assertSame(
+			0,
+			substr_count( $log, 'No purge service could run' ),
+			'A queued retry means the purge is not lost'
+		);
+
+		$this->assertNotEmpty(
+			array_filter(
+					$sent->getArrayCopy(),
+					static fn ( array $request ): bool => str_contains( $request['url'], 'varnish.internal' )
+				),
+				'The valid service was dispatched'
+		);
+		[ $retry ] = $this->popQueuedMultiPurgeJobs();
+		$this->assertInstanceOf( MultiPurgeJob::class, $retry, 'The failed valid service was queued for retry' );
+		$this->assertSame( Varnish::class, $retry->getParams()['service'] );
+	}
+
+	/**
+	 * When the queue rejects that retry, the handoff really did fail and the notification reports it.
+	 * That report goes through the enqueue rejection error, not by claiming every service was unusable.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testInvalidPlusFailedValidWithRejectedRetryReportsHandoffFailure() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue( 'MultiPurgeEnabledServices', [ 'NoSuchService', Varnish::class ] );
+		$sent = $this->mockServiceResponses( [ 'varnish.internal' => 500 ] );
+		$this->installReadOnlyJobQueueGroupFactory();
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertFalse(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'The rejected handoff fails the notification'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString( 'queueing a retry was rejected', $log,
+			'The handoff failure is logged as such' );
+		$this->assertSame(
+			0,
+			substr_count( $log, 'No purge service could run' ),
+			'The valid service ran and was dispatched; it is not an all-unusable configuration'
+		);
+		$this->assertStringContainsString( '"service":"NoSuchService"', $log );
+	}
+
+	/**
+	 * An intentionally disabled extension (no enabled services) purges nothing by choice.
+	 * The notification stays a silent success with no warnings and no lost-purge error.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testDisabledConfigurationStaysSilentSuccess() {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [],
+		] );
+		$this->mockServiceResponses( [] );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] )
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringNotContainsString( 'Unknown purge service', $log );
+		$this->assertStringNotContainsString( 'No purge service could run', $log );
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs() );
+	}
+
+	/**
+	 * A notification with no URLs leaves nothing to purge.
+	 * It must succeed without a lost-purge error even when enabled services select no usable service.
+	 * No work was requested that could be lost.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testEmptyNotificationSucceedsWithoutLostPurgeError() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue( 'MultiPurgeServiceOrder', [ 'Varis' ] );
+		$this->mockServiceResponses( [] );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [] ),
+			'An empty notification has nothing to lose and must not fail'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringNotContainsString(
+			'No purge service could run',
+			$log,
+			'No lost purge may be claimed when no URL was requested'
+		);
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'Nothing was queued' );
+	}
+
+	/**
+	 * A MultiPurgeOnPurgeUrls subscriber that removes every URL also leaves nothing to purge.
+	 * Letting the hook continue must not change that outcome.
+	 * Success is required without a lost-purge error even with an enabled-but-unusable selection.
+	 * A nonempty notification against the same configuration still errors.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @return void
+	 */
+	public function testHookEmptiedUrlsSucceedWithoutLostPurgeError() {
+		$this->enableVarnishInline();
+		$this->overrideConfigValue( 'MultiPurgeServiceOrder', [ 'Varis' ] );
+		$this->mockServiceResponses( [] );
+		$this->setTemporaryHook( 'MultiPurgeOnPurgeUrls',
+			static function ( array &$urls ): bool {
+				$urls = [];
+				return true;
+			}
+		);
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$level|$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'The emptied list leaves nothing to purge and must not fail'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringNotContainsString(
+			'No purge service could run',
+			$log,
+			'No lost purge may be claimed when the subscriber removed every URL'
+		);
+		$this->assertSame( [], $this->popQueuedMultiPurgeJobs(), 'Nothing was queued' );
+
+		// The same misconfigured selection still fails a notification that kept its URLs.
+		$this->setTemporaryHook( 'MultiPurgeOnPurgeUrls',
+			static function ( array &$urls ): bool {
+				return true;
+			}
+		);
+		$this->assertFalse(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'A nonempty notification against an unusable selection still reports the lost purge'
+		);
+		$this->assertStringContainsString( 'No purge service could run',
+			implode( "\n", $entries->getArrayCopy() ) );
 	}
 
 	/**

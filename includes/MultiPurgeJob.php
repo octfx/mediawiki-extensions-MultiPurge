@@ -10,12 +10,10 @@ use InvalidArgumentException;
 use Job;
 use MediaWiki\Config\Config;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
-use MediaWiki\Extension\MultiPurge\Services\PurgeServiceInterface;
 use MediaWiki\Extension\MultiPurge\Services\StreamingPurgeService;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
-use ReflectionClass;
-use ReflectionException;
 use Wikimedia\Http\MultiHttpClient;
 
 class MultiPurgeJob extends Job implements GenericParameterJob {
@@ -33,7 +31,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	private $extensionConfig;
 
 	/**
-	 * @var array Map containing instantiated purge services
+	 * @var array<string,StreamingPurgeService>
 	 */
 	private $serviceContainer = [];
 
@@ -53,18 +51,13 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	private array $droppedTargets = [];
 
 	/**
-	 * List of available purge services
+	 * These are the services the last run() skipped because they could not be instantiated, such as unknown names.
 	 *
 	 * @var string[]
 	 */
-	private $availableServices = [
-		Cloudflare::class,
-		Varnish::class,
-	];
+	private array $invalidServices = [];
 
 	/**
-	 * Returns all enabled services in order as an array
-	 *
 	 * @return string[]
 	 */
 	public static function getServiceOrder(): array {
@@ -82,16 +75,44 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 		$services = array_map( [ __CLASS__, 'normalizeServiceName' ], $services );
 
-		$serviceOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' ) ?? $services;
+		$configuredOrder = $extensionConfig->get( 'MultiPurgeServiceOrder' );
+		$serviceOrder = $configuredOrder ?? $services;
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Service Order: %s', json_encode( $serviceOrder ) ) );
 		$serviceOrder = array_map( [ __CLASS__, 'normalizeServiceName' ], $serviceOrder );
+
+		// The intersection silently drops invalid order entries, so unknown names are warned before it runs.
+		// An unset order copies the enabled list, so it is not warned about twice.
+		self::warnUnknownServiceNames( $services, 'MultiPurgeEnabledServices' );
+		if ( $configuredOrder !== null ) {
+			self::warnUnknownServiceNames( $serviceOrder, 'MultiPurgeServiceOrder' );
+		}
 
 		$enabled = array_intersect( $serviceOrder, $services );
 
 		wfDebugLog( 'MultiPurge', sprintf( 'Enabled Services in Order: %s', json_encode( $enabled ) ) );
 
 		return $enabled;
+	}
+
+	/**
+	 * Warns about configured names that match no purge service, naming the setting they came from.
+	 * The warning repeats on every evaluation because a misconfigured service name stays unusable until it is fixed.
+	 * Once-per-process suppression could go stale after a configuration change, so none is used.
+	 *
+	 * @param string[] $names Normalized configured names
+	 * @param string $setting Configuration variable the names came from
+	 * @return void
+	 */
+	private static function warnUnknownServiceNames( array $names, string $setting ): void {
+		foreach ( array_unique( $names ) as $name ) {
+			if ( $name !== Cloudflare::class && $name !== Varnish::class ) {
+				LoggerFactory::getInstance( 'MultiPurge' )->warning(
+					'Unknown purge service "{service}" in {setting}; known services are Cloudflare and Varnish',
+					[ 'service' => $name, 'setting' => $setting ]
+				);
+			}
+		}
 	}
 
 	/**
@@ -130,6 +151,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		// A reused instance must report the state of the run just executed, never the previous one.
 		$this->sentPurgeRequests = false;
 		$this->droppedTargets = [];
+		$this->invalidServices = [];
 
 		if ( !isset( $this->params['service'] ) ) {
 			$enabled = self::getServiceOrder();
@@ -180,21 +202,27 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 			try {
 				$purgeService = $this->getPurgeService( $service );
+			} catch ( InvalidArgumentException $e ) {
+				// Retrying cannot fix an unknown service name.
+				LoggerFactory::getInstance( 'MultiPurge' )->warning(
+					'Could not instantiate purge service {service}: {error}',
+					[ 'service' => $service, 'error' => $e->getMessage() ]
+				);
+				$this->invalidServices[] = $service;
+				continue;
+			}
+
+			$batch = [];
+			foreach ( $purgeService->yieldPurgeRequests( $urls ) as $request ) {
+				$batch[] = $request;
+				if ( count( $batch ) < self::MAX_REQUESTS_PER_RUN_MULTI ) {
+					continue;
+				}
+				$submitted += $this->flushBatch( $http, $batch, $submitted, $good );
 				$batch = [];
-				foreach ( $purgeService->yieldPurgeRequests( $urls ) as $request ) {
-					$batch[] = $request;
-					if ( count( $batch ) < self::MAX_REQUESTS_PER_RUN_MULTI ) {
-						continue;
-					}
-					$submitted += $this->flushBatch( $http, $batch, $submitted, $good );
-					$batch = [];
-				}
-				if ( $batch !== [] ) {
-					$submitted += $this->flushBatch( $http, $batch, $submitted, $good );
-				}
-			} catch ( ReflectionException $e ) {
-				wfDebugLog( 'MultiPurge', $e->getMessage() );
-				wfLogWarning( sprintf( '[MultiPurge] Could not instantiate service "%s"', $service ) );
+			}
+			if ( $batch !== [] ) {
+				$submitted += $this->flushBatch( $http, $batch, $submitted, $good );
 			}
 		}
 
@@ -286,8 +314,17 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 	}
 
 	/**
-	 * Get a class string from name
+	 * These are the services the last run() skipped because they could not be instantiated, such as unknown names.
+	 * Misconfiguration is permanent, so these runs never fail or trigger queue retries.
+	 * Callers use this to report the configuration problem instead of a successful purge.
 	 *
+	 * @return string[] Skipped service names
+	 */
+	public function getInvalidServices(): array {
+		return $this->invalidServices;
+	}
+
+	/**
 	 * @param string $name
 	 * @return string
 	 */
@@ -300,35 +337,20 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		};
 	}
 
-	/**
-	 * Returns a service by class
-	 * Instantiates and sets up the service
-	 *
-	 * @param string $class
-	 * @return StreamingPurgeService
-	 * @throws ReflectionException
-	 */
 	private function getPurgeService( string $class ): StreamingPurgeService {
 		$class = self::normalizeServiceName( $class );
-
-		if ( !in_array( $class, $this->availableServices ) ) {
-			throw new InvalidArgumentException( sprintf( 'Service "%s" not recognized.', $class ) );
-		}
-
 		if ( isset( $this->serviceContainer[$class] ) ) {
 			return $this->serviceContainer[$class];
 		}
 
-		$ref = new ReflectionClass( $class );
-		/** @var StreamingPurgeService $instance */
-		$instance = $ref->newInstanceArgs( [
-			$this->extensionConfig,
-			MediaWikiServices::getInstance()->getHttpRequestFactory()
-		] );
+		$instance = match ( $class ) {
+			Cloudflare::class => new Cloudflare( $this->extensionConfig ),
+			Varnish::class => new Varnish( $this->extensionConfig ),
+			default => throw new InvalidArgumentException( sprintf( 'Service "%s" not recognized.', $class ) ),
+		};
 		$instance->setup();
 
 		$this->serviceContainer[$class] = $instance;
-
 		return $instance;
 	}
 }

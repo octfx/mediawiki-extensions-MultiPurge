@@ -35,7 +35,7 @@ MultiPurge replaces the `cdn-url-purges` relayer and warns if it displaces a cus
 
 Run MediaWiki job workers even if purges run inline. MediaWiki controls retries.
 
-Check the `MultiPurge` log for rejected enqueues and the queue for abandoned jobs. On the default database queue, `claimTTL` controls when a failed job can run again; keep it longer than the job runtime. Service order controls dispatch, not completion. If Cloudflare purges first, it can refill from stale Varnish content.
+Check the `MultiPurge` log for rejected enqueues and the queue for abandoned jobs. On the default database queue, `claimTTL` controls when a failed job can run again; keep it longer than the job runtime. Service order controls dispatch, not completion. If Cloudflare purges first, it can refill from stale Varnish content. Purges use MediaWiki's HTTP timeouts.
 
 ## Parser cache warm-up
 

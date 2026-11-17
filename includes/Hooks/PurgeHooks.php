@@ -78,6 +78,8 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 	public function onArticlePurge( $wikiPage ): void {
 		// Listing thumbnails scans the file backend, so with no enabled service it must not run at all.
 		if ( !MultiPurgeJob::getServiceOrder() ) {
+			// Disabled stays silent; an enabled-but-unusable selection loses every purge and must be reported.
+			$this->reportUnusableServiceConfig();
 			return;
 		}
 
@@ -196,12 +198,21 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 
 		wfDebugLog( 'MultiPurge', 'Running Job from PurgeHooks' );
 
+		$serviceOrder = MultiPurgeJob::getServiceOrder();
+		if ( !$serviceOrder ) {
+			$this->reportUnusableServiceConfig();
+			return;
+		}
+
 		$urls = MultiPurgeJob::filterDispatchUrls( $urls );
 		if ( !$urls ) {
 			return;
 		}
 
-		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
+		$validServiceRan = false;
+		$invalidServices = [];
+
+		foreach ( $serviceOrder as $service ) {
 			$job = new MultiPurgeJob( [ 'urls' => $urls, 'service' => $service ] );
 
 			if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
@@ -214,8 +225,18 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 					$status = false;
 				}
 
+				$jobInvalidServices = $job->getInvalidServices();
+				$invalidServices = array_merge( $invalidServices, $jobInvalidServices );
+				// A failed or thrown run dispatched a usable service; a success counts unless it skipped its service.
+				$validServiceRan = $validServiceRan || ( $status ? $jobInvalidServices === [] : true );
+
 				if ( $status ) {
-					wfDebugLog( 'MultiPurge', 'Job Status: success' );
+					// A returning success may have sent nothing through a veto, an empty batch, or an unusable service.
+					// Logging plain success would claim a purge that did not happen.
+					wfDebugLog( 'MultiPurge', $job->didSendPurgeRequests()
+						? 'Job Status: success'
+						: 'Job Status: sent no purge requests'
+					);
 					continue;
 				}
 
@@ -229,6 +250,33 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 				wfDebugLog( 'MultiPurge', 'Job Status: error, retry scheduled' );
 			}
 		}
+
+		// The lost-purge error is reserved for a configuration where every dispatched service was unusable.
+		// A valid service that failed keeps its own retry handoff and must not be reported as lost.
+		if ( $invalidServices !== [] && !$validServiceRan ) {
+			LoggerFactory::getInstance( 'MultiPurge' )->error(
+				'No purge service could run; nothing was purged or queued for: {services}',
+				[ 'services' => implode( ', ', $invalidServices ) ]
+			);
+		}
+	}
+
+	/**
+	 * Makes an enabled-but-unusable selection observable as a lost purge, because nothing can ever run or be queued.
+	 * An intentionally disabled extension (no enabled services) logs nothing.
+	 *
+	 * @return void
+	 */
+	private function reportUnusableServiceConfig(): void {
+		$enabled = $this->config->get( 'MultiPurgeEnabledServices' );
+		if ( !$enabled ) {
+			return;
+		}
+
+		LoggerFactory::getInstance( 'MultiPurge' )->error(
+			'No purge service could run; nothing was purged or queued for: {services}',
+			[ 'services' => implode( ', ', $enabled ) ]
+		);
 	}
 
 	/**
