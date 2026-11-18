@@ -6,6 +6,7 @@
 	"multipurge-form-title": "Ressourcen in konfigurierten Caches bereinigen",
 	"multipurge-title-input": "Titel zum Bereinigen",
 	"multipurge-special-purge-success": "URLs erfolgreich bereinigt",
+	"multipurge-special-purge-retry": "Nicht alle Dienste wurden bereinigt; die fehlgeschlagenen wurden zur Wiederholung in die Warteschlange gestellt",
 	"multipurge-special-purge-error": "Fehler beim Bereinigen von URLs",
 	"multipurge-special-no-urls": "Keine Urls ausgewählt",
 	"multipurge-styles-label": "Styles zum Bereinigen auswählen",

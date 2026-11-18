@@ -4,15 +4,16 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Hooks;
 
-use Exception;
 use File;
 use JobQueueGroup;
 use MediaWiki\Cache\HtmlCacheUpdater;
 use MediaWiki\Config\Config;
 use MediaWiki\Context\RequestContext;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Hook\EditPage__attemptSave_afterHook;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\Hook\ArticlePurgeHook;
 use MediaWiki\ResourceLoader\Context;
@@ -23,6 +24,7 @@ use MediaWiki\Title\Title;
 use MediaWiki\Utils\UrlUtils;
 use ReflectionException;
 use ReflectionObject;
+use Throwable;
 use WikiFilePage;
 use WikiPage;
 
@@ -219,22 +221,55 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 			] );
 
 			if ( $this->config->get( 'MultiPurgeRunInQueue' ) === true ) {
-				$this->group->lazyPush( $job );
+				$this->queueAfterInvalidation( $job, $service, 'Queueing the {service} purge was rejected: {error}' );
 			} else {
 				try {
 					$status = $job->run();
-				} catch ( Exception ) {
+				} catch ( Throwable $e ) {
+					wfDebugLog( 'MultiPurge', sprintf( 'Job failed: %s', $e->getMessage() ) );
 					$status = false;
 				}
-				wfDebugLog(
-					'MultiPurge',
-					sprintf(
-						'Job Status: %s',
-						( $status ? 'success' : 'error' )
-					)
+
+				if ( $status ) {
+					wfDebugLog( 'MultiPurge', 'Job Status: success' );
+					continue;
+				}
+
+				// An inline run gets no queue retry of its own, so queue the failed service job for retry.
+				// Retry timing and attempt limits stay with the configured queue backend.
+				$this->queueAfterInvalidation(
+					$job,
+					$service,
+					'Purge by {service} failed and queueing a retry was rejected: {error}'
 				);
+				wfDebugLog( 'MultiPurge', 'Job Status: error, retry scheduled' );
 			}
 		}
+	}
+
+	/**
+	 * Enqueue a service job after the invalidation of the purge that triggered it, when possible.
+	 * In web requests, deferred updates always wait until the end of the request, past the invalidation commit.
+	 * In CLI with no open transaction, MediaWiki may run deferred updates immediately, so this order is not guaranteed.
+	 * A job visible to workers before the invalidation can refill caches with the stale content being purged.
+	 * DeferredUpdates is MediaWiki's own deferred mechanism, so no custom scheduling is added.
+	 *
+	 * @param MultiPurgeJob $job
+	 * @param string $service
+	 * @param string $message Log message with {service} and {error} placeholders
+	 * @return void
+	 */
+	private function queueAfterInvalidation( MultiPurgeJob $job, string $service, string $message ): void {
+		DeferredUpdates::addCallableUpdate( function () use ( $job, $service, $message ): void {
+			try {
+				$this->group->push( $job );
+			} catch ( Throwable $e ) {
+				LoggerFactory::getInstance( 'MultiPurge' )->error(
+					$message,
+					[ 'service' => $service, 'error' => $e->getMessage() ]
+				);
+			}
+		} );
 	}
 
 	/**

@@ -4,8 +4,9 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge;
 
-use Exception;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
+use Throwable;
 use Wikimedia\EventRelayer\EventRelayer;
 
 class PurgeEventRelayer extends EventRelayer {
@@ -36,6 +37,10 @@ class PurgeEventRelayer extends EventRelayer {
 
 		wfDebugLog( 'MultiPurge', 'Running Job' );
 
+		// The relayer reports the synchronous handoff to the queue, not the purge outcome.
+		// A late insert failure, such as SQLite inside an open transaction, surfaces at commit instead.
+		$relayed = true;
+
 		foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
 			$job = new MultiPurgeJob( [
 				'urls' => array_unique( $urls ),
@@ -43,23 +48,44 @@ class PurgeEventRelayer extends EventRelayer {
 			] );
 
 			if ( MediaWikiServices::getInstance()->getMainConfig()->get( 'MultiPurgeRunInQueue' ) === true ) {
-				MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( $job );
+				// The relayer hands off immediately; core orders this context after the invalidation.
+				try {
+					MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->push( $job );
+				} catch ( Throwable $e ) {
+					LoggerFactory::getInstance( 'MultiPurge' )->error(
+						'Queueing the {service} purge was rejected: {error}',
+						[ 'service' => $service, 'error' => $e->getMessage() ]
+					);
+					$relayed = false;
+				}
 			} else {
 				try {
 					$status = $job->run();
-				} catch ( Exception ) {
+				} catch ( Throwable $e ) {
+					wfDebugLog( 'MultiPurge', sprintf( 'Job failed: %s', $e->getMessage() ) );
 					$status = false;
 				}
-				wfDebugLog(
-					'MultiPurge',
-					sprintf(
-						'Job Status: %s',
-						( $status ? 'success' : 'error' )
-					)
-				);
+
+				if ( $status ) {
+					wfDebugLog( 'MultiPurge', 'Job Status: success' );
+					continue;
+				}
+
+				// An inline run gets no queue retry of its own, so queue the failed service job right away.
+				// Retry timing and attempt limits stay with the configured queue backend.
+				try {
+					MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->push( $job );
+					wfDebugLog( 'MultiPurge', 'Job Status: error, queued for retry' );
+				} catch ( Throwable $e ) {
+					LoggerFactory::getInstance( 'MultiPurge' )->error(
+						'Purge by {service} failed and queueing a retry was rejected: {error}',
+						[ 'service' => $service, 'error' => $e->getMessage() ]
+					);
+					$relayed = false;
+				}
 			}
 		}
 
-		return true;
+		return $relayed;
 	}
 }

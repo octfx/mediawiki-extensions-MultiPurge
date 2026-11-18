@@ -4,16 +4,17 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Extension\MultiPurge\Specials;
 
-use Exception;
 use MediaWiki\Config\ConfigException;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Message\Message;
 use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Status\Status;
 use OOUIHTMLForm;
 use PermissionsError;
+use Throwable;
 
 class SpecialPurgeResources extends SpecialPage {
 	public function __construct() {
@@ -141,20 +142,49 @@ class SpecialPurgeResources extends SpecialPage {
 		);
 
 		if ( $urls ) {
-			$job = new MultiPurgeJob( [
-				'urls' => $urls,
-			] );
+			$group = MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup();
+			$queuedForRetry = false;
+			$retryLost = false;
 
-			try {
-				if ( $job->run() ) {
-					return new Message( 'multipurge-special-purge-success' );
-					// return Status::newGood();
+			foreach ( MultiPurgeJob::getServiceOrder() as $service ) {
+				$job = new MultiPurgeJob( [
+					'urls' => $urls,
+					'service' => $service,
+				] );
+
+				try {
+					$status = $job->run();
+				} catch ( Throwable $e ) {
+					wfDebugLog( 'MultiPurge', sprintf( 'Job failed: %s', $e->getMessage() ) );
+					$status = false;
 				}
-			} catch ( Exception ) {
-				// Fall through
+
+				if ( $status ) {
+					continue;
+				}
+
+				// An inline run gets no queue retry of its own, so queue just this failed service.
+				// Services that succeeded are not re-run.
+				try {
+					$group->push( $job );
+					$queuedForRetry = true;
+				} catch ( Throwable $e ) {
+					LoggerFactory::getInstance( 'MultiPurge' )->error(
+						'Purge by {service} failed and queueing a retry was rejected: {error}',
+						[ 'service' => $service, 'error' => $e->getMessage() ]
+					);
+					$retryLost = true;
+				}
 			}
 
-			return Status::newFatal( 'multipurge-special-purge-error' );
+			if ( $retryLost ) {
+				return Status::newFatal( 'multipurge-special-purge-error' );
+			}
+			if ( $queuedForRetry ) {
+				return Status::newFatal( 'multipurge-special-purge-retry' );
+			}
+
+			return new Message( 'multipurge-special-purge-success' );
 		}
 
 		return Status::newFatal( 'multipurge-special-no-urls' );

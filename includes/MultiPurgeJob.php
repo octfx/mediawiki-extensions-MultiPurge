@@ -12,14 +12,11 @@ use MediaWiki\Config\Config;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\PurgeServiceInterface;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
-use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use ReflectionClass;
 use ReflectionException;
-use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 class MultiPurgeJob extends Job implements GenericParameterJob {
-	private const MAX_RATE_LIMIT_RETRIES = 5;
 
 	/**
 	 * @var Config Extension config passed to each service
@@ -122,9 +119,6 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 
 			try {
 				foreach ( $this->getPurgeService( $service )->getPurgeRequest( $urls ) as $request ) {
-					// Remembered so a rate-limited request can be retried on its own
-					$request['purgeService'] = $service;
-					$request['purgeUrls'] ??= $urls;
 					$requests[] = $request;
 				}
 			} catch ( ReflectionException $e ) {
@@ -143,23 +137,14 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 		}
 
 		$good = true;
-		$rateLimited = [];
 		foreach ( $statuses as $data ) {
-			[ $code, , $headers, $body, $error ] = $data['response'];
+			[ $code, , , $body, $error ] = $data['response'];
 			if ( $code >= 200 && $code <= 299 ) {
 				continue;
 			}
 
-			if ( $code === 429 && isset( $data['purgeService'] ) ) {
-				$service = $data['purgeService'];
-				$rateLimited[$service]['urls'] = [ ...( $rateLimited[$service]['urls'] ?? [] ), ...$data['purgeUrls'] ];
-				$rateLimited[$service]['retryAfter'] = max(
-					$rateLimited[$service]['retryAfter'] ?? 0,
-					(int)( $headers['retry-after'] ?? 0 )
-				);
-				continue;
-			}
-
+			// Any unsuccessful response, including 429, fails the job so the configured queue retries it.
+			// Queues without delayed-job support reject jobs that carry a custom release timestamp.
 			$status = $body ?? $error;
 			wfDebugLog(
 				'MultiPurge',
@@ -168,64 +153,7 @@ class MultiPurgeJob extends Job implements GenericParameterJob {
 			$good = false;
 		}
 
-		foreach ( $rateLimited as $service => $retry ) {
-			$this->retryRateLimited( $service, $retry['urls'], $retry['retryAfter'] );
-		}
-
 		return $good;
-	}
-
-	/**
-	 * Queue the URLs of rate-limited requests for another attempt, waiting as long as the
-	 * service asked or backing off exponentially
-	 *
-	 * @param string $service
-	 * @param string[] $urls
-	 * @param int $retryAfter Seconds the service asked to wait, 0 if it did not say
-	 */
-	private function retryRateLimited( string $service, array $urls, int $retryAfter ): void {
-		$retries = $this->params['rateLimitRetries'] ?? 0;
-		if ( $retries >= self::MAX_RATE_LIMIT_RETRIES ) {
-			LoggerFactory::getInstance( 'MultiPurge' )->error(
-				'Dropping {count} URLs still rate-limited by {service} after {retries} retries',
-				[ 'count' => count( $urls ), 'service' => $service, 'retries' => $retries ]
-			);
-			return;
-		}
-
-		// Cloudflare blocks an account for five minutes once its API rate limit is exceeded
-		$delay = $retryAfter > 0 ? $retryAfter : min( 60 * 2 ** $retries, 300 );
-
-		MediaWikiServices::getInstance()->getJobQueueGroupFactory()->makeJobQueueGroup()->lazyPush( new self( [
-			'urls' => array_values( array_unique( $urls ) ),
-			'service' => $service,
-			'rateLimitRetries' => $retries + 1,
-			'jobReleaseTimestamp' => (int)ConvertibleTimestamp::time() + $delay,
-		] ) );
-
-		wfDebugLog(
-			'MultiPurge',
-			sprintf( 'Rate-limited by %s, retrying %d URLs in %d seconds', $service, count( $urls ), $delay )
-		);
-	}
-
-	/**
-	 * Delays CloudFlare purge jobs in order to mitigate hitting the rate limit
-	 *
-	 * @return float|int|null
-	 */
-	public function getReleaseTimestamp() {
-		if (
-			isset( $this->params['service'] ) &&
-			self::normalizeServiceName( $this->params['service'] ) === Cloudflare::class
-		) {
-			// Delay cloudflare jobs to not hit the 1000 urls/min purge limit
-			$delay = (int)( ( count( $this->params['urls'] ) / 500 ) * 60 );
-
-			return parent::getReleaseTimestamp() + $delay;
-		}
-
-		return parent::getReleaseTimestamp();
 	}
 
 	/**

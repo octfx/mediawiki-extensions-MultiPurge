@@ -6,6 +6,7 @@
 	"multipurge-form-title": "Purge Resources in configured caches",
 	"multipurge-title-input": "Title to purge",
 	"multipurge-special-purge-success": "Successfully purged urls",
+	"multipurge-special-purge-retry": "Not all services were purged; the failed ones were queued for retry",
 	"multipurge-special-purge-error": "Error while purging urls",
 	"multipurge-special-no-urls":  "No urls selected",
 	"multipurge-styles-label":  "Select Styles to purge",

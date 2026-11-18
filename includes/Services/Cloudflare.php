@@ -127,8 +127,6 @@ class Cloudflare implements PurgeServiceInterface {
 			'postData' => $postData,
 			// Body in case of curl
 			'body' => $postData,
-			// Lets MultiPurgeJob retry just this request if it is rate-limited
-			'purgeUrls' => $urls,
 		];
 	}
 }

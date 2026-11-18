@@ -24,6 +24,12 @@ For a custom CDN purger:
 | `$wgMultiPurgeCloudFlareBaseUrl`       | `"https://api.cloudflare.com"` | String - The base URL of Cloudflare's API domain, or an internal service URL such as an egress gateway.                                   |
 
 
+## Purge retries
+
+Run MediaWiki job workers even if purges run inline. MediaWiki controls retries.
+
+Check the `MultiPurge` log for rejected enqueues and the queue for abandoned jobs. On the default database queue, `claimTTL` controls when a failed job can run again; keep it longer than the job runtime. Service order controls dispatch, not completion. If Cloudflare purges first, it can refill from stale Varnish content.
+
 ## Parser cache warm-up
 
 When a template or module is edited, MediaWiki re-renders every page that uses it in the background, then throws the result away, so each page is parsed again the next time someone views it.
