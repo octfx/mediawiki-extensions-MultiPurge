@@ -1766,6 +1766,39 @@ class SpecialPurgeResourcesTest extends SpecialPageTestBase {
 			'The one selected url the hook removed is counted once, not once per service' );
 	}
 
+	/**
+	 * A rate-limited Cloudflare purge is handed off inside the job's run and reported as a
+	 * queued retry, never as success, and only the failed chunk's targets are queued.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Specials\SpecialPurgeResources::trySubmit
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::run
+	 * @return void
+	 */
+	public function testCloudflareFailureIsHandedOffAndReportedAsRetryNotSuccess() {
+		$this->overrideConfigValues( [
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'MultiPurgeCloudFlareZoneId' => 'test-zone',
+			'MultiPurgeCloudFlareApiToken' => 'test-token',
+		] );
+		[ $fixture ] = $this->setUpFormWiki();
+		$this->mockSpecialPageHttp( $fixture, [ 'api.cloudflare' => 429 ] );
+
+		[ $html ] = $this->submitPurgeForm( [
+			'wpstyles' => [ self::STYLE_URL ],
+		] );
+
+		$this->assertStringContainsString( '(multipurge-special-purge-retry)', $html,
+			'The handoff is reported as a queued retry' );
+		$this->assertStringContainsString( 'mw-htmlform-ooui-header-errors', $html );
+		$this->assertStringNotContainsString( '(multipurge-special-purge-success)', $html,
+			'A handed-off retry is not a completed purge' );
+
+		$jobs = $this->popQueuedMultiPurgeJobs();
+		$this->assertCount( 1, $jobs, 'Only the replacement job is queued' );
+		$this->assertTrue( $jobs[0]->getParams()['replacement'] );
+		$this->assertSame( Cloudflare::class, $jobs[0]->getParams()['service'] );
+	}
+
 	private function enableBothServices(): void {
 		$this->overrideConfigValues( [
 			'MultiPurgeEnabledServices' => [ Cloudflare::class, Varnish::class ],

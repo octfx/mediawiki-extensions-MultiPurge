@@ -265,7 +265,9 @@ class MultiPurgeJobTest extends MediaWikiIntegrationTestCase {
 			'MultiPurgeEnabledServices' => [
 				Cloudflare::class,
 				Varnish::class,
-			]
+			],
+			'MultiPurgeCloudFlareZoneId' => 'test-zone',
+			'MultiPurgeCloudFlareApiToken' => 'test-token',
 		] );
 
 		$multiMock = $this->getMockBuilder( MultiHttpClient::class )->disableOriginalConstructor()->getMock();
@@ -285,7 +287,15 @@ class MultiPurgeJobTest extends MediaWikiIntegrationTestCase {
 			],
 		] );
 
-		$this->assertFalse( $job->run() );
+		$this->assertTrue( $job->run(), 'The accepted handoff covers the failed Cloudflare chunk' );
+		$this->assertTrue( $job->didHandOffRetry() );
+
+		$replacement = MediaWikiServices::getInstance()->getJobQueueGroup()
+			->get( 'MultiPurgePages' )->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $replacement );
+		$this->assertTrue( $replacement->getParams()['replacement'] );
+		$this->assertSame( [ 'https://localhost' ], $replacement->getParams()['urls'],
+			'The replacement carries the failed request\'s targets' );
 	}
 
 	/**
@@ -685,13 +695,14 @@ class MultiPurgeJobTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * A rate-limited service response must fail the job so MediaWiki's queue retries it.
-	 * The job must not report success or schedule its own delayed retry.
+	 * A rate-limited Cloudflare response hands off the failed chunk as a replacement job.
+	 * The default queue of this test setup supports no delayed job, so the replacement is
+	 * queued without a release timestamp and the queue owns its retry timing.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::run
 	 * @return void
 	 */
-	public function testRunFailsOnRateLimit() {
+	public function testRateLimitHandsOffFailedChunk() {
 		$this->overrideConfigValues( [
 			'Server' => 'https://example.org',
 			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
@@ -718,13 +729,18 @@ class MultiPurgeJobTest extends MediaWikiIntegrationTestCase {
 			'service' => Cloudflare::class,
 		] );
 
-		$this->assertFalse( $job->run() );
+		$this->assertTrue( $job->run(), 'The accepted handoff covers the rate-limited chunk' );
+		$this->assertTrue( $job->didHandOffRetry() );
 		DeferredUpdates::doUpdates();
 
-		$queue = MediaWikiServices::getInstance()->getJobQueueGroupFactory()
-			->makeJobQueueGroup()->get( 'MultiPurgePages' );
-		$queue->flushCaches();
-		$this->assertSame( 0, $queue->getSize(), 'No custom retry job was enqueued' );
+		$queue = MediaWikiServices::getInstance()->getJobQueueGroup()->get( 'MultiPurgePages' );
+		$replacement = $queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $replacement,
+			'The failed chunk was handed off as a replacement job' );
+		$this->assertSame( [ 'https://example.org/1' ], $replacement->getParams()['urls'] );
+		$this->assertTrue( $replacement->getParams()['replacement'] );
+		$this->assertNull( $replacement->getReleaseTimestamp(),
+			'The queue supports no delayed job, so no release timestamp is requested' );
 	}
 
 	/**

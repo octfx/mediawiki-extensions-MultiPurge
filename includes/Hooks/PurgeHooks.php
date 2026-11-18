@@ -219,7 +219,7 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 				$this->queueAfterInvalidation( $job, $service, 'Queueing the {service} purge was rejected: {error}' );
 			} else {
 				try {
-					$status = $job->run();
+					$status = $job->run( handOffRetry: false );
 				} catch ( Throwable $e ) {
 					wfDebugLog( 'MultiPurge', sprintf( 'Job failed: %s', $e->getMessage() ) );
 					$status = false;
@@ -245,9 +245,9 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 				$this->queueAfterInvalidation(
 					$job,
 					$service,
-					'Purge by {service} failed and queueing a retry was rejected: {error}'
+					'Purge by {service} failed and queueing a retry was rejected: {error}',
+					isRetry: true
 				);
-				wfDebugLog( 'MultiPurge', 'Job Status: error, retry scheduled' );
 			}
 		}
 
@@ -289,12 +289,22 @@ class PurgeHooks implements ArticlePurgeHook, EditPage__attemptSave_afterHook {
 	 * @param MultiPurgeJob $job
 	 * @param string $service
 	 * @param string $message Log message with {service} and {error} placeholders
+	 * @param bool $isRetry Whether the job already attempted the purge.
 	 * @return void
 	 */
-	private function queueAfterInvalidation( MultiPurgeJob $job, string $service, string $message ): void {
-		DeferredUpdates::addCallableUpdate( function () use ( $job, $service, $message ): void {
+	private function queueAfterInvalidation(
+		MultiPurgeJob $job, string $service, string $message, bool $isRetry = false
+	): void {
+		DeferredUpdates::addCallableUpdate( function () use ( $job, $service, $message, $isRetry ): void {
 			try {
+				if ( $isRetry && $job->tryHandOffRetry() ) {
+					wfDebugLog( 'MultiPurge', 'Job Status: error, retry handed off' );
+					return;
+				}
 				$this->group->push( $job );
+				if ( $isRetry ) {
+					wfDebugLog( 'MultiPurge', 'Job Status: error, retry scheduled' );
+				}
 			} catch ( Throwable $e ) {
 				LoggerFactory::getInstance( 'MultiPurge' )->error(
 					$message,

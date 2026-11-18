@@ -85,6 +85,43 @@ class Cloudflare implements StreamingPurgeService {
 	}
 
 	/**
+	 * Returns the target URLs one purge request map covers, so only failed requests are retried.
+	 * An empty result means the caller cannot safely replace this request.
+	 *
+	 * @param array $request Request map as built by makeRequest()
+	 * @return string[] Targets, deduplicated; cache-by-device-type variants fold onto their URL
+	 */
+	public static function getTargetsForRequest( array $request ): array {
+		$postData = $request['postData'] ?? $request['body'] ?? null;
+		if ( !is_string( $postData ) ) {
+			return [];
+		}
+
+		try {
+			$payload = json_decode( $postData, true, 512, JSON_THROW_ON_ERROR );
+		} catch ( JsonException ) {
+			return [];
+		}
+
+		$files = is_array( $payload ) ? ( $payload['files'] ?? null ) : null;
+		if ( !is_array( $files ) ) {
+			return [];
+		}
+
+		$targets = [];
+		foreach ( $files as $file ) {
+			if ( is_string( $file ) ) {
+				$targets[] = $file;
+			} elseif ( is_array( $file ) && is_string( $file['url'] ?? null ) ) {
+				// Device-type variants repeat one URL per device key; a replacement regenerates them.
+				$targets[] = $file['url'];
+			}
+		}
+
+		return array_values( array_unique( $targets ) );
+	}
+
+	/**
 	 * @param array $urls
 	 * @return array
 	 * @throws JsonException

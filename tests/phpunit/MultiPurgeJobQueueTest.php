@@ -8,7 +8,6 @@ use ArrayObject;
 use HashBagOStuff;
 use JobQueue;
 use JobQueueDB;
-use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Extension\MultiPurge\MultiPurgeJob;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
 use MediaWiki\Extension\MultiPurge\Services\Varnish;
@@ -17,8 +16,10 @@ use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\WikiMap\WikiMap;
 use MediaWikiIntegrationTestCase;
+use RuntimeException;
 use WANObjectCache;
 use Wikimedia\Http\MultiHttpClient;
+use Wikimedia\Rdbms\IDatabase;
 
 /**
  * Runs MultiPurgeJob against a real JobQueueDB to verify enqueue, retry, and
@@ -107,12 +108,14 @@ class MultiPurgeJobQueueTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * A rate-limited attempt fails the job; the queue recycles the same claimed job
-	 * once its claim expires, and the retried job then succeeds and is acknowledged.
+	 * A rate-limited original hands its failed chunk to a replacement job in the same queue.
+	 * The runner acknowledges the original once the handoff is accepted, and the replacement
+	 * carries the same work, succeeds, and is acknowledged in turn.
 	 *
 	 * @return void
 	 */
-	public function testRateLimitedJobIsRetriedByQueueAndCompletes() {
+	public function testRateLimitedJobHandsOffReplacementThatCompletes() {
+		$this->routeGroupToThisQueue();
 		$this->mockHttpResponses( [ 429, 200 ] );
 
 		$this->queue->push( new MultiPurgeJob( [
@@ -120,83 +123,115 @@ class MultiPurgeJobQueueTest extends MediaWikiIntegrationTestCase {
 			'service' => Cloudflare::class,
 		] ) );
 
-		$first = $this->queue->pop();
-		$this->assertFalse( $first->run(), 'A 429 response must fail the job' );
+		$original = $this->queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $original );
+		$this->assertTrue(
+			$original->run(),
+			'The accepted handoff covers the failed chunk, so the original needs no queue retry'
+		);
+		$this->assertTrue( $original->didHandOffRetry() );
 
-		// The runner does not acknowledge a failed job, so it stays claimed
+		$this->queue->ack( $original );
+
 		$this->queue->flushCaches();
-		$this->assertSame( 0, $this->queue->getSize() );
-		$this->assertSame( 1, $this->queue->getAcquiredCount() );
+		$this->assertSame( 1, $this->queue->getSize(), 'Exactly one replacement job was enqueued' );
 
-		$this->expireClaimAndRecycle();
+		$replacement = $this->queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $replacement );
+		$this->assertSame( $this->makeUrls( 9 ), $replacement->getParams()['urls'],
+			'The single failed chunk covered every target' );
+		$this->assertTrue( $replacement->getParams()['replacement'],
+			'The replacement flag survives queue serialization' );
+		$this->assertNull( $replacement->getReleaseTimestamp(),
+			'The database queue supports no delayed job, so none was requested' );
 
-		$this->queue->flushCaches();
-		$this->assertSame( 1, $this->queue->getSize(), 'The claimed job was recycled' );
-		$this->assertSame( 0, $this->queue->getAcquiredCount() );
+		$this->assertTrue( $replacement->run() );
+		$this->queue->ack( $replacement );
 
-		$second = $this->queue->pop();
-		$this->assertInstanceOf( MultiPurgeJob::class, $second );
-		$this->assertSame( $first->getParams(), $second->getParams(), 'The same job was retried' );
-		$this->assertTrue( $second->run() );
-
-		$this->queue->ack( $second );
 		$this->queue->flushCaches();
 		$this->assertSame( 0, $this->queue->getSize() );
 		$this->assertSame( 0, $this->queue->getAcquiredCount() );
 		$this->assertSame( 0, $this->queue->getAbandonedCount() );
-
-		$this->assertNoCustomRetryJobWasQueued();
 	}
 
 	/**
-	 * The queue stops recycling a job after its attempt limit; the extension must not
-	 * report success for any failed attempt or keep the job looping.
+	 * The replacement's own failures return failure to the queue, which recycles the same
+	 * claimed job until its attempt limit and then abandons it. No further replacement is
+	 * ever created, and the job parameters stay identical across every attempt.
 	 *
 	 * @return void
 	 */
-	public function testFailedJobRetriesAreExhaustedAndAbandoned() {
-		$this->mockHttpResponses( array_fill( 0, self::MAX_TRIES, 429 ) );
+	public function testReplacementJobRetriesAreExhaustedAndAbandoned() {
+		$this->routeGroupToThisQueue();
+		$this->mockHttpResponses( array_fill( 0, self::MAX_TRIES + 1, 429 ) );
 
 		$this->queue->push( new MultiPurgeJob( [
 			'urls' => $this->makeUrls( 9 ),
 			'service' => Cloudflare::class,
 		] ) );
 
+		$original = $this->queue->pop();
+		$this->assertTrue( $original->run(), 'The rate-limited original hands off its failed chunk' );
+		$this->queue->ack( $original );
+
+		$this->queue->flushCaches();
+		$this->assertSame( 1, $this->queue->getSize(), 'The replacement was enqueued' );
+		$replacement = $this->queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $replacement );
+		$expectedParams = $replacement->getParams();
+
 		for ( $attempt = 1; $attempt <= self::MAX_TRIES; $attempt++ ) {
-			$job = $this->queue->pop();
+			$job = $attempt === 1 ? $replacement : $this->queue->pop();
 			$this->assertInstanceOf( MultiPurgeJob::class, $job, "Attempt $attempt was offered" );
-			$this->assertFalse( $job->run(), "Attempt $attempt must not report success" );
+			$this->assertSame( $expectedParams, $job->getParams(),
+				'MediaWiki retries the same replacement job, flag included' );
+			$this->assertFalse( $job->run(),
+				"Attempt $attempt must not report success while it keeps failing" );
+
+			// A later 429 must not create another replacement.
+			$this->queue->flushCaches();
+			$this->assertSame( 0, $this->queue->getSize(), "No replacement of the replacement after attempt $attempt" );
 
 			$this->expireClaimAndRecycle();
 		}
 
-		$this->assertFalse( $this->queue->pop(), 'The exhausted job is not recycled again' );
+		$this->assertFalse( $this->queue->pop(), 'The exhausted replacement is not recycled again' );
 
 		$this->queue->flushCaches();
 		$this->assertSame( 1, $this->queue->getAbandonedCount() );
-		$this->assertNoCustomRetryJobWasQueued();
 	}
 
 	/**
-	 * Non-rate-limit errors fail the job the same way, so the queue can retry them.
+	 * Non-rate-limit errors hand off their chunk too: the replacement is enqueued without a
+	 * delay and the queue owns its retry timing, exactly as for a 429 without a usable header.
 	 *
 	 * @return void
 	 */
-	public function testNonRateLimitErrorFailsTheJobForQueueRetry() {
-		$this->mockHttpResponses( [ 500 ] );
+	public function testNonRateLimitFailureHandsOffReplacementWithoutDelay() {
+		$this->routeGroupToThisQueue();
+		$this->mockHttpResponses( [ 500, 200 ] );
 
 		$this->queue->push( new MultiPurgeJob( [
 			'urls' => $this->makeUrls( 9 ),
 			'service' => Cloudflare::class,
 		] ) );
 
-		$job = $this->queue->pop();
-		$this->assertFalse( $job->run() );
+		$original = $this->queue->pop();
+		$this->assertTrue( $original->run(), 'The handoff covers the failed chunk' );
+		$this->queue->ack( $original );
 
-		// The failed job stays claimed until the backend recycles or abandons it
 		$this->queue->flushCaches();
-		$this->assertSame( 1, $this->queue->getAcquiredCount() );
+		$this->assertSame( 1, $this->queue->getSize() );
+
+		$replacement = $this->queue->pop();
+		$this->assertNull( $replacement->getReleaseTimestamp(), 'No delay was requested' );
+		$this->assertTrue( $replacement->run() );
+		$this->queue->ack( $replacement );
+
+		$this->queue->flushCaches();
 		$this->assertSame( 0, $this->queue->getSize() );
+		$this->assertSame( 0, $this->queue->getAcquiredCount() );
+		$this->assertSame( 0, $this->queue->getAbandonedCount() );
 	}
 
 	/**
@@ -259,25 +294,17 @@ class MultiPurgeJobQueueTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * The real JobRunner leaves a failed retryable job unacknowledged; after the queue's
-	 * claim timeout the same job is offered again and can then succeed and be removed.
+	 * The real JobRunner executes a queued original whose run hands off its failed chunk,
+	 * acknowledges the original, and then executes the handed-off replacement.
 	 * Only the claim timeout itself is simulated, by backdating the claim timestamp.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::run
 	 * @return void
 	 */
-	public function testJobRunnerRetriesFailedJobAfterClaimExpiry() {
+	public function testJobRunnerExecutesHandedOffReplacementJob() {
 		$this->mockHttpResponses( [ 500, 200 ] );
 
-		// Route this job type's queue to the test-DB-backed JobQueueDB, built through core's service wiring.
-		$this->overrideConfigValue( MainConfigNames::JobTypeConf, [
-			'default' => [ 'class' => \JobQueueMemory::class ],
-			'MultiPurgePages' => [
-				'class' => JobQueueDBSingle::class,
-				'claimTTL' => self::CLAIM_TTL,
-			],
-		] );
-		$this->getServiceContainer()->resetServiceForTesting( 'JobQueueGroupFactory' );
+		$this->routeGroupToThisQueue();
 
 		$group = $this->getServiceContainer()->getJobQueueGroupFactory()->makeJobQueueGroup();
 		$group->push( new MultiPurgeJob( [
@@ -290,29 +317,49 @@ class MultiPurgeJobQueueTest extends MediaWikiIntegrationTestCase {
 		$first = $runner->run( [ 'maxJobs' => 1 ] );
 		$this->assertSame( 'job-limit', $first['reached'] );
 		$this->assertCount( 1, $first['jobs'] );
-		$this->assertSame( 'failed', $first['jobs'][0]['status'] );
+		$this->assertSame( 'ok', $first['jobs'][0]['status'],
+			'The accepted handoff lets the original complete from the queue\'s point of view' );
 
-		// The runner did not acknowledge the failed job, so it stays claimed
 		$dbw = $this->getDb( DB_PRIMARY );
-		$claimed = $dbw->newSelectQueryBuilder()
-			->select( 'job_id' )
+		$remaining = $dbw->newSelectQueryBuilder()
+			->select( 'COUNT(*)' )
 			->from( 'job' )
-			->where( [ 'job_cmd' => 'MultiPurgePages', $dbw->expr( 'job_token', '!=', '' ) ] )
+			->where( [ 'job_cmd' => 'MultiPurgePages' ] )
 			->caller( __METHOD__ )->fetchField();
-		$this->assertNotFalse( $claimed, 'The failed job was left unacknowledged and claimed' );
-
-		$this->expireClaimAndRecycle();
+		$this->assertSame( 1, (int)$remaining, 'Only the unclaimed replacement remains in the queue' );
 
 		$second = $runner->run( [ 'maxJobs' => 1 ] );
 		$this->assertSame( 'job-limit', $second['reached'] );
 		$this->assertCount( 1, $second['jobs'] );
 		$this->assertSame( 'ok', $second['jobs'][0]['status'] );
 
-		// The acknowledged job is gone from the queue
 		$this->queue->flushCaches();
 		$this->assertSame( 0, $this->queue->getSize() );
 		$this->assertSame( 0, $this->queue->getAcquiredCount() );
 		$this->assertSame( 0, $this->queue->getAbandonedCount() );
+	}
+
+	/**
+	 * The runner must not acknowledge the original if the replacement insert fails at commit.
+	 */
+	public function testDeferredReplacementInsertFailurePreservesOriginal(): void {
+		$this->routeGroupToThisQueue( JobQueueDBRejectReplacement::class );
+		$this->mockHttpResponses( [ 429 ] );
+		$urls = $this->makeUrls( 9 );
+		$this->queue->push( new MultiPurgeJob( [ 'urls' => $urls, 'service' => Cloudflare::class ] ) );
+
+		$result = $this->getServiceContainer()->getJobRunner()->run( [ 'maxJobs' => 1 ] );
+		$this->assertSame( 'failed', $result['jobs'][0]['status'] );
+		$this->assertStringContainsString( 'Replacement insert failed', $result['jobs'][0]['error'] );
+		$this->queue->flushCaches();
+		$this->assertSame( 1, $this->queue->getAcquiredCount(), 'The original is still claimed' );
+		$this->assertFalse( $this->queue->pop(), 'The replacement was not inserted' );
+
+		$this->expireClaimAndRecycle();
+		$recycled = $this->queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $recycled );
+		$this->assertArrayNotHasKey( 'replacement', $recycled->getParams() );
+		$this->assertSame( $urls, $recycled->getParams()['urls'] );
 	}
 
 	/**
@@ -421,18 +468,20 @@ class MultiPurgeJobQueueTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * The extension must not schedule its own retry jobs; MediaWiki's queue owns retries.
+	 * Routes the job type the job pushes to onto this test's database queue, so handoff
+	 * inserts land in the same real table the test observes.
 	 *
+	 * @param class-string<JobQueueDBSingle> $queueClass
 	 * @return void
 	 */
-	private function assertNoCustomRetryJobWasQueued(): void {
-		DeferredUpdates::doUpdates();
-
-		$groupQueue = MediaWikiServices::getInstance()->getJobQueueGroupFactory()
-			->makeJobQueueGroup()
-			->get( 'MultiPurgePages' );
-		$groupQueue->flushCaches();
-		$this->assertSame( 0, $groupQueue->getSize(), 'No custom retry job was enqueued' );
+	private function routeGroupToThisQueue( string $queueClass = JobQueueDBSingle::class ): void {
+		$this->overrideConfigValue( MainConfigNames::JobTypeConf, [
+			'default' => [
+				'class' => $queueClass,
+				'claimTTL' => self::CLAIM_TTL,
+			],
+		] );
+		$this->getServiceContainer()->resetServiceForTesting( 'JobQueueGroupFactory' );
 	}
 }
 
@@ -447,5 +496,12 @@ class JobQueueDBSingle extends JobQueueDB {
 	protected function getDB( $index ) {
 		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
 		return $lb->getConnection( $index, [], $this->domain );
+	}
+}
+
+// phpcs:ignore Generic.Files.OneObjectStructurePerFile.MultipleFound
+class JobQueueDBRejectReplacement extends JobQueueDBSingle {
+	public function doBatchPushInternal( IDatabase $dbw, array $jobs, $flags, $method ) {
+		throw new RuntimeException( 'Replacement insert failed' );
 	}
 }

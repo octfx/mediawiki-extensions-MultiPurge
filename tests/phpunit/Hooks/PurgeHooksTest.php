@@ -536,6 +536,115 @@ class PurgeHooksTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
+	 * Workers must not retry failed chunks before the triggering invalidation commits.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::runPurge
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::run
+	 * @dataProvider provideInlineCloudflareRetry
+	 */
+	public function testInlineCloudflareFailureQueuesRetry( bool $interrupted ): void {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'MultiPurgeCloudFlareZoneId' => 'test-zone',
+			'MultiPurgeCloudFlareApiToken' => 'test-token',
+			'MultiPurgeCloudFlareUrlsPerRequest' => 1,
+		] );
+		$this->redefineEventRelayerGroupToFallback();
+		$original = new ArrayObject();
+		$this->setTemporaryHook( 'MultiPurgeOnPurgeService',
+			static function ( $service, array &$urls ) use ( $interrupted, $original ): void {
+				$original->exchangeArray( $urls );
+				$urls = [ 'https://example.org/failed', 'https://example.org/succeeded' ];
+				if ( $interrupted ) {
+					for ( $i = 0; $i < MultiPurgeJob::MAX_REQUESTS_PER_RUN_MULTI; $i++ ) {
+						$urls[] = "https://example.org/extra-$i";
+					}
+				}
+			}
+		);
+
+		$sent = new ArrayObject();
+		$multiMock = $this->getMockBuilder( MultiHttpClient::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$multiMock->method( 'runMulti' )->willReturnCallback(
+			static function ( array $requests ) use ( $sent, $interrupted ) {
+				if ( $interrupted && count( $sent ) > 0 ) {
+					throw new \Error( 'Interrupted second batch' );
+				}
+				foreach ( $requests as $i => $request ) {
+					$sent->append( $request );
+					$request['response'] = $i === 0
+						? [ 429, null, [ 'retry-after' => '3' ], null, null ]
+						: [ 200, null, [], null, null ];
+					$requests[$i] = $request;
+				}
+				return $requests;
+			}
+		);
+		$httpMock = $this->getMockBuilder( HttpRequestFactory::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
+		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+
+		$entries = new ArrayObject();
+		$logger = new class( $entries ) extends AbstractLogger {
+			public function __construct( private ArrayObject $entries ) {
+			}
+
+			public function log( $level, $message, array $context = [] ): void {
+				$this->entries[] = "$message " . json_encode( $context );
+			}
+		};
+		$this->setLogger( 'MultiPurge', $logger );
+
+		$hooks = new PurgeHooks(
+			$this->getServiceContainer()->getMainConfig(),
+			$this->getServiceContainer()->getJobQueueGroup(),
+			$this->getServiceContainer()->getResourceLoader(),
+			$this->getServiceContainer()->getUrlUtils(),
+		);
+		$guard = DeferredUpdates::preventOpportunisticUpdates();
+		$queue = $this->getServiceContainer()->getJobQueueGroup()->get( 'MultiPurgePages' );
+		$hooks->onArticlePurge(
+			$this->getServiceContainer()->getWikiPageFactory()->newFromTitle( Title::newFromText( 'HandoffPage' ) )
+		);
+		$this->assertFalse( $queue->pop(), 'Retry work is not visible before deferred updates' );
+		unset( $guard );
+		DeferredUpdates::doUpdates();
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringNotContainsString( 'Job Status: success', $log );
+		$retry = $queue->pop();
+		$this->assertInstanceOf( MultiPurgeJob::class, $retry );
+		$this->assertFalse( $queue->pop(), 'Only one retry is queued' );
+
+		if ( $interrupted ) {
+			$this->assertCount( MultiPurgeJob::MAX_REQUESTS_PER_RUN_MULTI, $sent );
+			$this->assertArrayNotHasKey( 'replacement', $retry->getParams() );
+			$this->assertSame( $original->getArrayCopy(), $retry->getParams()['urls'] );
+			$this->assertStringContainsString( 'Interrupted second batch', $log );
+			return;
+		}
+
+		$this->assertStringContainsString( 'Job Status: error, retry handed off', $log,
+			'The handoff is reported as queued retry work' );
+		$this->assertCount( 2, $sent );
+		$this->assertSame( [ 'https://example.org/failed' ], $retry->getParams()['urls'] );
+		$this->assertTrue( $retry->getParams()['replacement'] );
+	}
+
+	public static function provideInlineCloudflareRetry(): array {
+		return [
+			'completed run hands off failed chunks' => [ false ],
+			'interrupted run preserves the original work' => [ true ],
+		];
+	}
+
+	/**
 	 * Protocol-relative thumbnail URLs keep their own authority instead of being folded into $wgServer.
 	 *
 	 * @covers \MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks::onArticlePurge

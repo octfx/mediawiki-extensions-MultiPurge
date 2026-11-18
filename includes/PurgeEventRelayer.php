@@ -98,6 +98,12 @@ class PurgeEventRelayer extends EventRelayer {
 				$validServiceRan = $validServiceRan || ( $status ? $jobInvalidServices === [] : true );
 
 				if ( $status ) {
+					// The replacement is pending work, not a completed purge.
+					if ( $job->didHandOffRetry() ) {
+						wfDebugLog( 'MultiPurge', 'Job Status: error, retry handed off' );
+						continue;
+					}
+
 					// A returning success may have sent nothing through a veto, an empty batch, or an unusable service.
 					// Logging plain success would claim a purge that did not happen.
 					wfDebugLog( 'MultiPurge', $job->didSendPurgeRequests()

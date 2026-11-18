@@ -33,7 +33,7 @@ MultiPurge replaces the `cdn-url-purges` relayer and warns if it displaces a cus
 
 ## Purge retries
 
-Run MediaWiki job workers even if purges run inline. MediaWiki controls retries.
+Run MediaWiki job workers even if purges run inline. Cloudflare failures hand off only failed chunks. A delayed queue such as Redis honors a valid `Retry-After` on the first HTTP 429 handoff; the default database queue runs the replacement without that delay. MediaWiki controls later retries. If a handoff fails, the original work may be retried, including requests that already succeeded.
 
 Check the `MultiPurge` log for rejected enqueues and the queue for abandoned jobs. On the default database queue, `claimTTL` controls when a failed job can run again; keep it longer than the job runtime. Service order controls dispatch, not completion. If Cloudflare purges first, it can refill from stale Varnish content. Purges use MediaWiki's HTTP timeouts.
 

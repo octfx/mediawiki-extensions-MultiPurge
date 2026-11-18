@@ -865,6 +865,136 @@ class PurgeEventRelayerTest extends MediaWikiIntegrationTestCase {
 		}
 	}
 
+	/**
+	 * An inline Cloudflare failure is handed off as a replacement job inside the run itself.
+	 * The relayer reports the handoff, not a completed purge, and does not enqueue the whole
+	 * original job a second time; only the failed chunk's targets are queued.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::run
+	 * @return void
+	 */
+	public function testInlineCloudflareFailureIsHandedOffAsReplacementJob(): void {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'MultiPurgeCloudFlareZoneId' => 'test-zone',
+			'MultiPurgeCloudFlareApiToken' => 'test-token',
+			'MultiPurgeCloudFlareUrlsPerRequest' => 1,
+		] );
+
+		// One Cloudflare request per URL, so the first target fails while the second succeeds.
+		$sent = new ArrayObject();
+		$multiMock = $this->getMockBuilder( MultiHttpClient::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$multiMock->method( 'runMulti' )->willReturnCallback(
+			static function ( array $requests ) use ( $sent ) {
+				foreach ( $requests as $i => $request ) {
+					$sent->append( $request );
+					$request['response'] = $i === 0
+						? [ 429, null, [ 'retry-after' => '3' ], null, null ]
+						: [ 200, null, [], null, null ];
+					$requests[$i] = $request;
+				}
+				return $requests;
+			}
+		);
+		$httpMock = $this->getMockBuilder( HttpRequestFactory::class )
+			->disableOriginalConstructor()
+			->getMock();
+		$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
+		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+
+		$entries = $this->installLogSpy();
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [
+				[ 'url' => 'https://example.org/failed' ],
+			[ 'url' => 'https://example.org/succeeded' ],
+			] ),
+			'The accepted handoff relays the purge request'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString( 'Job Status: error, retry handed off', $log,
+			'The handoff is reported as queued retry work' );
+		$this->assertStringNotContainsString( 'Job Status: success', $log,
+			'A handed-off retry is not a completed purge' );
+		$this->assertStringNotContainsString( 'queued for retry', $log,
+			'The relayer does not enqueue the whole original job on top of the replacement' );
+
+		$this->assertCount( 2, $sent->getArrayCopy(), 'Both targets were dispatched' );
+		$jobs = $this->popQueuedMultiPurgeJobs();
+		$this->assertCount( 1, $jobs, 'Only the replacement job is queued' );
+		$this->assertSame( [ 'https://example.org/failed' ], $jobs[0]->getParams()['urls'],
+			'The replacement carries only the failed chunk\'s targets' );
+		$this->assertTrue( $jobs[0]->getParams()['replacement'] );
+		$this->assertNull( $jobs[0]->getReleaseTimestamp(),
+			'The queue of this test setup takes no delayed job, so none is requested' );
+	}
+
+	/**
+	 * When the queue rejects the replacement handoff, the inline relayer falls back to
+	 * queueing the whole original job, so the work stays eligible for MediaWiki's retry.
+	 * The rejection is logged as a handoff rejection, not as a lost purge.
+	 *
+	 * @covers \MediaWiki\Extension\MultiPurge\PurgeEventRelayer::doNotify
+	 * @covers \MediaWiki\Extension\MultiPurge\MultiPurgeJob::run
+	 * @return void
+	 */
+	public function testRejectedCloudflareHandoffLeavesOriginalWorkForQueueRetry(): void {
+		$this->overrideConfigValues( [
+			'MultiPurgeRunInQueue' => false,
+			'Server' => 'https://example.org',
+			'MultiPurgeEnabledServices' => [ Cloudflare::class ],
+			'MultiPurgeCloudFlareZoneId' => 'test-zone',
+			'MultiPurgeCloudFlareApiToken' => 'test-token',
+		] );
+		$this->mockServiceResponses( [ 'cloudflare' => 429 ] );
+
+		$workingGroup = $this->getServiceContainer()->getJobQueueGroup();
+		$pushes = 0;
+		$group = $this->getMockBuilder( JobQueueGroup::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'push' ] )
+			->getMock();
+		$group->method( 'push' )->willReturnCallback(
+			static function ( $job ) use ( $workingGroup, &$pushes ) {
+				if ( $pushes++ === 0 ) {
+					// The replacement handoff is rejected; the fallback enqueue still works.
+					throw new JobQueueError( 'test queue rejected the replacement' );
+				}
+				$workingGroup->push( $job );
+			}
+		);
+		$factory = $this->createMock( JobQueueGroupFactory::class );
+		$factory->method( 'makeJobQueueGroup' )->willReturn( $group );
+		$this->getServiceContainer()->resetServiceForTesting( 'JobQueueGroupFactory' );
+		$this->getServiceContainer()->redefineService( 'JobQueueGroupFactory', static fn () => $factory );
+
+		$entries = $this->installLogSpy();
+
+		$relayer = new PurgeEventRelayer( [] );
+		$this->assertTrue(
+			$relayer->notifyMulti( 'cdn-url-purges', [ [ 'url' => 'https://example.org/Foo' ] ] ),
+			'The accepted fallback enqueue still relays the purge request'
+		);
+
+		$log = implode( "\n", $entries->getArrayCopy() );
+		$this->assertStringContainsString( 'Queueing the Cloudflare replacement job was rejected', $log );
+		$this->assertStringContainsString( 'Job Status: error, queued for retry', $log );
+
+		[ $job ] = $this->popQueuedMultiPurgeJobs();
+		$this->assertInstanceOf( MultiPurgeJob::class, $job );
+		$this->assertArrayNotHasKey( 'replacement', $job->getParams(),
+			'It is the original job that is queued, not a replacement' );
+		$this->assertSame( [ 'https://example.org/Foo' ], $job->getParams()['urls'],
+			'The original work stays eligible for the queue\'s retry' );
+	}
+
 	private function enableVarnishInline(): void {
 		$this->overrideConfigValues( [
 			'MultiPurgeRunInQueue' => false,

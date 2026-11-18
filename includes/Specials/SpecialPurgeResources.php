@@ -237,6 +237,13 @@ class SpecialPurgeResources extends SpecialPage {
 			}
 
 			if ( $status ) {
+				// The replacement covers failed requests, not targets omitted by the original run.
+				if ( $job->didHandOffRetry() ) {
+					$queuedForRetry = true;
+					$droppedTargets = array_merge( $droppedTargets, $job->getDroppedTargets() );
+					continue;
+				}
+
 				// A returning-success run may have sent nothing at all: a hook veto or the post-hook policy emptied it.
 				if ( $job->didSendPurgeRequests() ) {
 					// A sent batch can still omit originals a hook removed or the policy rejected after the hook.
