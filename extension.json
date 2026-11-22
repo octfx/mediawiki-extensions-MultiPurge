@@ -36,6 +36,10 @@
 			"description": "",
 			"value": null
 		},
+		"MultiPurgeAllowedHosts": {
+			"description": "Additional first-party hostnames that purge targets may point at, such as upload or static asset hosts. Only bare hostnames; the exact $wgServer hostname is always allowed.",
+			"value": []
+		},
 		"MultiPurgeEnabledServices": {
 			"description": "List of enabled services, e.g. [Varnish, Cloudflare]",
 			"value": null

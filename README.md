@@ -17,12 +17,25 @@ For a custom CDN purger:
 | `$wgMultiPurgeCloudFlareZoneId`        | null             | String - Zone ID the Wiki Domain is contained in                                                                                                        |
 | `$wgMultiPurgeCloudFlareApiToken`      | null             | String - API Token found in your dashboard                                                                                                              |
 | `$wgMultiPurgeVarnishServers`          | null             | String/Array - Array of URLs pointing to your Varnish Servers. Can be IPs                                                                               |
+| `$wgMultiPurgeAllowedHosts`            | `[]`             | Array - Additional first-party purge target hostnames, e.g. `[ 'static.example.org' ]` |
 | `$wgMultiPurgeEnabledServices`         | null             | Array - List of enabled services. Possible values are 'Cloudflare', 'Varnish'                                                                           |
 | `$wgMultiPurgeServiceOrder`            | null             | Array - List of service purge order. Possible values are 'Cloudflare', 'Varnish'. Example: ['Varnish', 'Cloudflare'] purges varnish, then cloudflare    |
 | `$wgMultiPurgeWarmParserCacheOnRefreshLinks` | false      | Bool - Keep pages re-rendered after a template edit in the parser cache. See below                                                                      |
 | `$wgMultiPurgeCloudFlareUrlsPerRequest` | 100             | Int - Maximum URLs in one Cloudflare purge request. Cloudflare allows 100 on the Free, Pro and Business plans and 500 on Enterprise                     |
 | `$wgMultiPurgeCloudFlareBaseUrl`       | `"https://api.cloudflare.com"` | String - The base URL of Cloudflare's API domain, or an internal service URL such as an egress gateway.                                   |
 
+
+## Upgrading
+
+Only the exact hostname of `$wgServer` is allowed by default. Add any other hostnames you control, such as upload or static asset hosts, to `$wgMultiPurgeAllowedHosts`. Use bare hostnames without a scheme, port, or path. Use punycode for internationalized hostnames in `$wgServer`, the allowlist, and purge URLs. Rejected targets are logged to the `MultiPurge` channel.
+
+MultiPurge replaces the `cdn-url-purges` relayer and warns if it displaces a custom relayer at setup. The two relayers do not run together. When MultiPurge owns the relayer, ordinary page purges use its title URLs. A `MultiPurgeOnPurgeUrls` hook can filter or veto them.
+
+## Purge retries
+
+Run MediaWiki job workers even if purges run inline. Cloudflare failures hand off only failed chunks. A delayed queue such as Redis honors a valid `Retry-After` on the first HTTP 429 handoff; the default database queue runs the replacement without that delay. MediaWiki controls later retries. If a handoff fails, the original work may be retried, including requests that already succeeded.
+
+Check the `MultiPurge` log for rejected enqueues and the queue for abandoned jobs. On the default database queue, `claimTTL` controls when a failed job can run again; keep it longer than the job runtime. Service order controls dispatch, not completion. If Cloudflare purges first, it can refill from stale Varnish content. Purges use MediaWiki's HTTP timeouts.
 
 ## Parser cache warm-up
 
@@ -41,3 +54,5 @@ Only users with `editinterface` permissions can access this page.
 
 The page works by requesting the actual html output of a given title, and parsing all `load.php` calls.  
 All found links can then be selected to be purged.
+
+Image thumbnails on allowed purge hosts and configured `$wgMultiPurgeStaticPurges` entries are also offered.

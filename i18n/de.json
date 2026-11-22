@@ -5,9 +5,15 @@
 	"multipurge-desc": "Bereinige mehrere Dienste wie Cloudflare und Varnish bei Seitenänderungen.",
 	"multipurge-form-title": "Ressourcen in konfigurierten Caches bereinigen",
 	"multipurge-title-input": "Titel zum Bereinigen",
-	"multipurge-special-purge-success": "URLs erfolgreich bereinigt",
+	"multipurge-special-purge-success": "Die Bereinigungsanforderung wurde ohne Fehler abgeschlossen",
+	"multipurge-special-purge-retry": "Nicht alle Dienste wurden bereinigt; die fehlgeschlagenen wurden zur Wiederholung in die Warteschlange gestellt",
+	"multipurge-special-purge-retry-mixed": "Mindestens ein fehlgeschlagener Dienst wurde zur Wiederholung in die Warteschlange gestellt und mindestens einer konnte nicht eingereiht werden; siehe das MultiPurge-Protokoll",
+	"multipurge-special-purge-partial": "Von den ausgewählten URLs {{PLURAL:$1|war $1 URL|waren $1 URLs}} gültig, aber $2 {{PLURAL:$2|URL wurde|URLs wurden}} von der Host-Richtlinie dauerhaft abgelehnt und {{PLURAL:$2|wird|werden}} weder bereinigt noch wiederholt; siehe das MultiPurge-Protokoll",
+	"multipurge-special-purge-rejected": "$1 {{PLURAL:$1|URL wurde|URLs wurden}} von der Host-Richtlinie abgelehnt und wird weder bereinigt noch wiederholt; siehe das MultiPurge-Protokoll",
+	"multipurge-special-no-services": "Es ist kein Bereinigungsdienst aktiviert, daher wurde nichts bereinigt",
 	"multipurge-special-purge-error": "Fehler beim Bereinigen von URLs",
 	"multipurge-special-no-urls": "Keine Urls ausgewählt",
+	"multipurge-special-no-resources": "Für diese Seite gibt es keine Ressourcen zum Bereinigen.",
 	"multipurge-styles-label": "Styles zum Bereinigen auswählen",
 	"multipurge-scripts-label": "Skripte zum Bereinigen auswählen",
 	"multipurge-thumbs-label": "Zu bereinigende Dateien auswählen",
@@ -17,5 +23,9 @@
 	"multipurge-special-purge-submit": "Ausgewählte Ressourcen bereinigen",
 	"multipurge-special-load-submit": "Ressourcen laden",
 	"multipurge-special-invalid-title": "Titel existiert nicht",
-	"purgeresources": "Ressourcen mit einem bestimmten Titel bereinigen"
+	"purgeresources": "Ressourcen mit einem bestimmten Titel bereinigen",
+	"multipurge-special-purge-unavailable": "Die Bereinigungsziele für diesen Titel konnten nicht geladen werden, daher wurde nichts bereinigt",
+	"multipurge-special-purge-no-work": "$1 {{PLURAL:$1|aktivierter Dienst hat|aktivierte Dienste haben}} keine Bereinigungsanforderungen gesendet. Einzelheiten stehen im MultiPurge-Protokoll.",
+	"multipurge-special-purge-stale-selection": "Die Seite bietet nicht mehr jede Gruppe an, aus der ausgewählt wurde, daher wurde nichts bereinigt; Ressourcen erneut laden und neu auswählen",
+	"multipurge-special-purge-omitted": "$1 {{PLURAL:$1|ausgewählte URL wurde|ausgewählte URLs wurden}} von mindestens einem aktivierten Dienst nicht gesendet (Dienst-Hook oder Bereinigungsrichtlinie); ein anderer Dienst hat sie möglicherweise gesendet; siehe das MultiPurge-Protokoll"
 }
