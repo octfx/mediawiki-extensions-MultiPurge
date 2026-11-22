@@ -34,3 +34,12 @@ jobs:
       project-type: extension
       project-name: MultiPurge
       runner: ubuntu-24.04-arm
+      # MediaWiki core's Composer dependencies do not yet support PHP 8.6.
+      matrix: >
+        [
+          {"mw": "REL1_43", "php": "8.3", "coverage": "xdebug", "experimental": false},
+          {"mw": "REL1_45", "php": "8.4", "coverage": "none", "experimental": false},
+          {"mw": "REL1_46", "php": "8.5", "coverage": "none", "experimental": false},
+          {"mw": "REL1_47", "php": "8.5", "coverage": "none", "experimental": false},
+          {"mw": "master", "php": "8.5", "coverage": "none", "experimental": true}
+        ]
