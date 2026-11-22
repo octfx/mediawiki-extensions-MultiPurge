@@ -10,6 +10,7 @@ use ForeignAPIRepo;
 use FSFileBackend;
 use JobQueueGroup;
 use LocalFile;
+use MediaWiki\Cache\HTMLCacheUpdater;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Extension\MultiPurge\Hooks\PurgeHooks;
 use MediaWiki\Extension\MultiPurge\Services\Cloudflare;
@@ -588,7 +589,15 @@ class PurgeHooksDoPurgeTest extends MediaWikiIntegrationTestCase {
 			->disableOriginalConstructor()
 			->getMock();
 		$httpMock->method( 'createMultiClient' )->willReturn( $multiMock );
-		$this->getServiceContainer()->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+		$services = $this->getServiceContainer();
+		$services->redefineService( 'HttpRequestFactory', static fn () => $httpMock );
+
+		if ( version_compare( MW_VERSION, '1.46', '>=' ) ) {
+			// Core's test updater suppresses the CDN events these tests need to observe.
+			$this->setService( 'HTMLCacheUpdater', new HTMLCacheUpdater(
+				$services->getHookContainer(), $services->getTitleFactory(), 0, false, 0
+			) );
+		}
 
 		return $sent;
 	}

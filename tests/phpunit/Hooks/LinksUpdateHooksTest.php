@@ -124,6 +124,10 @@ class LinksUpdateHooksTest extends MediaWikiIntegrationTestCase {
 		$this->edit( self::TEMPLATE, 'old template text' );
 		$this->edit( self::PAGE, '{{MultiPurgeWarmTest}}' );
 		$this->runJobs( [ 'minJobs' => 0 ] );
+		if ( $config['UseParsoidLinksUpdate'] ?? false ) {
+			// The edit populated the Parsoid cache, so seed the legacy cache with a page view.
+			$this->viewPage();
+		}
 		$this->assertStringContainsString( 'old template text', $this->cachedText() ?? '' );
 
 		ConvertibleTimestamp::setFakeTime( $now - 1800 );
@@ -246,8 +250,7 @@ class LinksUpdateHooksTest extends MediaWikiIntegrationTestCase {
 		if ( version_compare( MW_VERSION, '1.47', '<' ) ) {
 			$this->markTestSkipped( 'Before MW 1.47, RefreshLinksJob always uses the parser page views use' );
 		}
-		// Page views use the legacy parser, links updates Parsoid. MW 1.47 defaults page views to
-		// Parsoid too, so the view side has to be forced back for the "another parser" premise.
+		// Make the refresh job use a different parser from page views.
 		$this->setUpCascade( true, [ 'UseParsoidParser' => false, 'UseParsoidLinksUpdate' => true ] );
 		$touched = $this->touched();
 

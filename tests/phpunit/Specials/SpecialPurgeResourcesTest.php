@@ -1272,6 +1272,7 @@ class SpecialPurgeResourcesTest extends SpecialPageTestBase {
 	 * @return void
 	 */
 	public function testSubmitMixedSelectionWithFailedServiceDisclosesRejection() {
+		$this->overrideConfigValue( 'Server', 'http://localhost' );
 		$this->enableBothServices();
 		$this->mockServiceResponses( [ 'varnish.internal' => 500 ] );
 
@@ -2076,7 +2077,7 @@ class SpecialPurgeResourcesTest extends SpecialPageTestBase {
 			->getParserOutput( ParserOptions::newFromAnon() );
 		$this->assertNotFalse( $parserOutput );
 
-		$bodyHtml = $parserOutput->getRawText();
+		$bodyHtml = $parserOutput->getContentHolderText();
 		preg_match_all( '/<img [^>]*src="([^"]+)"/', $bodyHtml, $matches );
 		$this->assertNotEmpty( $matches[1], 'The parser output contains the fixture thumbnail' );
 
